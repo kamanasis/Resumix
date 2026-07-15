@@ -1,0 +1,8 @@
+{
+  "name": "Resumix",
+  "description": "An online platform where users upload resumes and configure target company goals, enabling AI to tailor resume content and suggest changes for optimal ATS scores.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
