@@ -200,7 +200,7 @@ Your analysis MUST return a structured JSON response matching the following EXAC
     const prompt = `Here is the user's current resume content:\n${resumeText}\n\nPlease analyze, research, and tailor this resume specifically for the company: ${targetCompany}, role: ${targetRole}, level: ${experienceLevel || "Not Specified"}, location: ${location || "Not Specified"}. Respond with valid JSON adhering strictly to the specified schema.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
       contents: [
         { role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }
       ],
@@ -356,7 +356,7 @@ Your analysis MUST return a structured JSON response matching this EXACT schema 
     const prompt = `Please research entry-level hiring at ${targetCompany} for the role of ${targetRole}. Produce a complete roadmap, fresher guidance, and a pristine, custom-tailored starter resume Markdown.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
       contents: [
         { role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }
       ],
@@ -419,7 +419,7 @@ app.post("/api/generate-requirement-profile", async (req, res) => {
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
       contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
       config: { responseMimeType: "application/json", responseSchema: schema }
     });
@@ -461,7 +461,7 @@ app.post("/api/parse-resume", async (req, res) => {
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
       contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + resumeText }] }],
       config: { responseMimeType: "application/json", responseSchema: schema }
     });
@@ -536,7 +536,7 @@ Frozen Requirement Profile: ${JSON.stringify(frozenProfile)}`;
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
       contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
       config: { responseMimeType: "application/json", responseSchema: schema }
     });
@@ -573,7 +573,7 @@ app.post("/api/tailor-gap", async (req, res) => {
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
       contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
       config: { 
         responseMimeType: "application/json", 
@@ -636,7 +636,7 @@ Please return the fully optimized resume text in Markdown, and explain every cha
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash",
       contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
       config: { 
         responseMimeType: "application/json", 
