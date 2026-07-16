@@ -547,30 +547,24 @@ Frozen Requirement Profile: ${JSON.stringify(frozenProfile)}`;
   }
 });
 
-// V2 Deterministic Pipeline - Phase 5: Tailoring Engine
+// V2 Deterministic Pipeline - Phase 5: Tailoring Engine (Optimized for speed)
 app.post("/api/tailor-gap", async (req, res) => {
   try {
     const { resumeText, frozenProfile, missingItem } = req.body;
     if (!resumeText || !frozenProfile || !missingItem) return res.status(400).json({ error: "Missing data." });
 
     const ai = getAI();
-    const systemPrompt = `You are a strict Resume Tailoring Engine.
-Your goal is to suggest an improvement for ONE missing checklist item.
-Do not invent additional requirements. Do not rewrite unnecessarily.
-Only fill the verified gap.
-
-Resume Context: ${resumeText.substring(0, 3000)}... (truncated for context)
-Missing Item to address: ${JSON.stringify(missingItem)}
-Frozen Profile snippet: ${JSON.stringify(frozenProfile).substring(0, 1000)}
-
-Please return EXACTLY WHERE and HOW the user should add this item to their resume, keeping it truthful and ATS-friendly. Follow the 'Where should I add it?' format.`;
+    const systemPrompt = `You are a strict Resume Tailoring Engine. Suggest an improvement for ONE missing checklist item. Do not invent requirements. Keep suggestions concise and fast.
+    Resume Context (short snippet): ${resumeText.substring(0, 1500)}...
+    Missing Item: ${JSON.stringify(missingItem)}
+    Frozen Profile: ${JSON.stringify(frozenProfile).substring(0, 500)}`;
 
     const schema = {
       type: Type.OBJECT,
       properties: {
         section: { type: Type.STRING, description: "e.g., Skills, Experience, Project, Summary" },
-        suggestedSentence: { type: Type.STRING, description: "A truthful, ATS-friendly bullet the user can adapt." },
-        evidenceStatus: { type: Type.STRING, description: "e.g., 'Needs your confirmation before adding' or 'Already supported by your resume context'" },
+        suggestedSentence: { type: Type.STRING, description: "A truthful, ATS-friendly bullet." },
+        evidenceStatus: { type: Type.STRING, description: "e.g., 'Needs your confirmation before adding' or 'Already supported'" },
         reason: { type: Type.STRING },
         atsImpact: { type: Type.STRING },
         confidence: { type: Type.INTEGER }
@@ -581,12 +575,79 @@ Please return EXACTLY WHERE and HOW the user should add this item to their resum
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
-      config: { responseMimeType: "application/json", responseSchema: schema }
+      config: { 
+        responseMimeType: "application/json", 
+        responseSchema: schema,
+        temperature: 0.1,
+        // Limiting tokens and parameters to achieve near-instant generation
+        maxOutputTokens: 200
+      }
     });
 
     res.json(JSON.parse(response.text!));
   } catch (error: any) {
     res.status(500).json({ error: "Failed to tailor gap.", details: error.message });
+  }
+});
+
+// V2 Deterministic Pipeline - Phase 5 & 14: Batch Tailoring & Explanation Engine
+app.post("/api/tailor-resume-batch", async (req, res) => {
+  try {
+    const { resumeText, frozenProfile, selectedItems } = req.body;
+    if (!resumeText || !frozenProfile || !selectedItems) return res.status(400).json({ error: "Missing data." });
+
+    const ai = getAI();
+    const systemPrompt = `You are a strict Resume Tailoring Engine.
+Optimize the current resume by addressing ONLY the selected missing checklist items.
+Do not invent additional requirements. Do not rewrite sections that are already correct.
+Integrate the missing skills, keywords, or projects naturally into the resume text.
+
+Resume Context:
+${resumeText}
+
+Selected items to resolve:
+${JSON.stringify(selectedItems)}
+
+Frozen Profile:
+${JSON.stringify(frozenProfile)}
+
+Please return the fully optimized resume text in Markdown, and explain every change you made.`;
+
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        tailoredContent: { type: Type.STRING, description: "Complete, professionally optimized resume in Markdown format." },
+        explanations: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              whatChanged: { type: Type.STRING, description: "e.g., Added TypeScript to skills, or Added Docker project in Experience" },
+              why: { type: Type.STRING },
+              atsBenefit: { type: Type.STRING, description: "e.g., +4%" },
+              recruiterBenefit: { type: Type.STRING, description: "High, Medium, or Low" },
+              confidence: { type: Type.INTEGER }
+            },
+            required: ["whatChanged", "why", "atsBenefit", "recruiterBenefit", "confidence"]
+          }
+        }
+      },
+      required: ["tailoredContent", "explanations"]
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
+      config: { 
+        responseMimeType: "application/json", 
+        responseSchema: schema,
+        temperature: 0.2
+      }
+    });
+
+    res.json(JSON.parse(response.text!));
+  } catch (error: any) {
+    res.status(500).json({ error: "Failed to perform batch tailoring.", details: error.message });
   }
 });
 

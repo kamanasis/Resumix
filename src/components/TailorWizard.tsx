@@ -37,10 +37,17 @@ export default function TailorWizard({
   const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null);
   const [gapReport, setGapReport] = useState<GapReport | null>(null);
   
-  // Tailoring UI state
+  // Single-issue Tailoring UI state (Legacy but optimized for reference/single view)
   const [activeMissingItem, setActiveMissingItem] = useState<MissingItem | null>(null);
   const [tailorRecommendation, setTailorRecommendation] = useState<TailorRecommendation | null>(null);
   const [isTailoring, setIsTailoring] = useState(false);
+
+  // Checkboxes & Batch Tailoring states
+  const [selectedItems, setSelectedItems] = useState<MissingItem[]>([]);
+  const [batchResult, setBatchResult] = useState<{ tailoredContent: string; explanations: any[] } | null>(null);
+  const [isBatchTailoring, setIsBatchTailoring] = useState(false);
+  const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored">("checklist");
+  const [copiedText, setCopiedText] = useState(false);
 
   const startPipeline = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,7 +118,7 @@ export default function TailorWizard({
       createdAt: new Date().toISOString()
     });
 
-    if (gapData.isReadyToApply || gapData.overallCompletion >= 98) {
+    if (gapData.isReadyToApply || gapData.overallCompletion >= 97) {
       setStep("LOCKED");
     } else {
       setStep("DASHBOARD");
@@ -144,6 +151,41 @@ export default function TailorWizard({
     }
   };
 
+  const handleToggleCheckbox = (item: MissingItem) => {
+    if (selectedItems.some(i => i.title === item.title)) {
+      setSelectedItems(selectedItems.filter(i => i.title !== item.title));
+    } else {
+      setSelectedItems([...selectedItems, item]);
+    }
+  };
+
+  const handleBatchTailor = async () => {
+    if (selectedItems.length === 0) return;
+    setIsBatchTailoring(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/tailor-resume-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resumeText: selectedResume?.content,
+          frozenProfile,
+          selectedItems
+        })
+      });
+      if (!res.ok) throw new Error("Failed to perform batch tailoring.");
+      const data = await res.json();
+      setBatchResult(data);
+      setDashboardTab("tailored");
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "An error occurred during batch tailoring.");
+    } finally {
+      setIsBatchTailoring(false);
+    }
+  };
+
   const handleMarkResolved = async (item: MissingItem) => {
     if (!gapReport || !parsedResume || !frozenProfile) return;
     
@@ -151,13 +193,28 @@ export default function TailorWizard({
     setStep("PROCESSING");
     setLoadingMessage("Re-validating Resume...");
     
-    // Simulate updating parsed resume (In a real app, we'd update the actual text and re-parse)
     const updatedParsed = { ...parsedResume };
     if (item.type === "Skill" || item.type === "Technology") updatedParsed.skills.push(item.title);
     
     await runGapAnalysis(updatedParsed, frozenProfile);
     setActiveMissingItem(null);
     setTailorRecommendation(null);
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2000);
+  };
+
+  const downloadTextFile = (filename: string, content: string) => {
+    const element = document.createElement("a");
+    const file = new Blob([content], { type: "text/plain" });
+    element.href = URL.createObjectURL(file);
+    element.download = filename;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
   };
 
   // -------------------------------------------------------------------------------- //
@@ -200,10 +257,13 @@ export default function TailorWizard({
           </div>
         </div>
 
-        <p className="text-slate-500 text-xs mb-6">No further mandatory improvements detected. Optimization Locked.</p>
+        <p className="text-slate-500 text-xs mb-6">No additional required improvements detected. Optimization Locked.</p>
 
         <div className="flex gap-3">
-          <button className="px-6 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-[0_4px_20px_rgba(34,197,94,0.3)]">
+          <button 
+            onClick={() => downloadTextFile(`${targetCompany}_Tailored_Resume.md`, batchResult?.tailoredContent || selectedResume?.content || "")}
+            className="px-6 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-[0_4px_20px_rgba(34,197,94,0.3)]"
+          >
             <Download className="w-4 h-4" /> Download Final Resume
           </button>
           <button onClick={() => setStep("SETUP")} className="px-6 py-3 bg-white text-slate-600 border border-slate-200 font-bold rounded-xl hover:bg-slate-50 transition-all">
@@ -248,118 +308,257 @@ export default function TailorWizard({
           </div>
         </div>
 
-        {/* CATEGORY SCORECARD */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <ScoreCard title="ATS Compatibility" score={gapReport.scores.atsCompatibility} />
-          <ScoreCard title="Required Skills" score={gapReport.scores.requiredSkills} />
-          <ScoreCard title="Experience Match" score={gapReport.scores.experienceMatch} />
-          <ScoreCard title="Formatting" score={gapReport.scores.formatting} />
-        </div>
-
-        {/* MISSING REQUIREMENT CARDS */}
-        <div className="mt-8">
-          <h3 className="text-lg font-display font-bold text-slate-800 mb-4 flex items-center gap-2">
-            <CheckSquare className="w-5 h-5 text-cyan-500" />
-            Missing Requirements Checklist
-          </h3>
-          
-          {(!gapReport.missingItems || gapReport.missingItems.length === 0) ? (
-            <div className="p-8 bg-green-50 border border-green-100 rounded-2xl text-center">
-              <CheckCircle className="w-8 h-8 text-green-500 mx-auto mb-2" />
-              <p className="text-green-800 font-bold">All mandatory requirements met!</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {gapReport.missingItems.map((item, idx) => (
-                <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row gap-6">
-                  
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                        item.importance === 'Critical' ? 'bg-red-100 text-red-700' :
-                        item.importance === 'Recommended' ? 'bg-amber-100 text-amber-700' :
-                        'bg-slate-100 text-slate-700'
-                      }`}>
-                        {item.importance}
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{item.type}</span>
-                      <span className="ml-auto text-[10px] font-bold text-cyan-600 bg-cyan-50 px-2 py-1 rounded-lg">ATS Impact: {item.atsImpact}</span>
-                    </div>
-                    
-                    <h4 className="text-base font-bold text-slate-800 mb-1">{item.title}</h4>
-                    <p className="text-sm text-slate-600 mb-3">{item.reason}</p>
-                    
-                    {/* Tailoring Recommendation Expanded View */}
-                    <AnimatePresence>
-                      {activeMissingItem?.title === item.title && (
-                        <motion.div 
-                          initial={{ opacity: 0, height: 0 }} 
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-4 overflow-hidden"
-                        >
-                          {isTailoring ? (
-                            <div className="flex items-center gap-3 text-cyan-600 text-sm font-bold">
-                              <RefreshCw className="w-4 h-4 animate-spin" /> Generating tailored addition...
-                            </div>
-                          ) : tailorRecommendation ? (
-                            <div className="space-y-3">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Where to add it</span>
-                                  <span className="text-sm font-bold text-slate-800 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">{tailorRecommendation.section} Section</span>
-                                </div>
-                                <div>
-                                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Evidence Status</span>
-                                  <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${tailorRecommendation.evidenceStatus.includes('Already') ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                                    {tailorRecommendation.evidenceStatus}
-                                  </span>
-                                </div>
-                              </div>
-                              
-                              <div>
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Suggested Bullet / Sentence</span>
-                                <div className="bg-white border border-cyan-200 p-3 rounded-lg text-sm text-slate-700 italic border-l-4 border-l-cyan-500">
-                                  "{tailorRecommendation.suggestedSentence}"
-                                </div>
-                              </div>
-                              
-                              <div className="pt-2 flex gap-3">
-                                <button onClick={() => handleMarkResolved(item)} className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
-                                  <Check className="w-3.5 h-3.5" /> Apply & Re-Validate
-                                </button>
-                                <button onClick={() => setActiveMissingItem(null)} className="px-4 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-50 transition-all">
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                  </div>
-                  
-                  <div className="flex flex-col items-center justify-center border-l border-slate-100 pl-6 md:w-48">
-                    <div className="text-center mb-4">
-                      <span className="block text-2xl font-display font-bold text-slate-800">{item.confidenceScore}%</span>
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Confidence</span>
-                    </div>
-                    {activeMissingItem?.title !== item.title && (
-                      <button 
-                        onClick={() => handleFixItem(item)}
-                        className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-all shadow-sm"
-                      >
-                        Fix Issue
-                      </button>
-                    )}
-                  </div>
-
-                </div>
-              ))}
-            </div>
+        {/* TABS NAVIGATION */}
+        <div className="flex border-b border-slate-200">
+          <button 
+            onClick={() => setDashboardTab("checklist")}
+            className={`px-6 py-3 font-display font-bold text-sm transition-all border-b-2 ${
+              dashboardTab === "checklist" ? "border-cyan-500 text-cyan-600" : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            Checklist ({gapReport.missingItems?.length || 0} Gaps)
+          </button>
+          {batchResult && (
+            <button 
+              onClick={() => setDashboardTab("tailored")}
+              className={`px-6 py-3 font-display font-bold text-sm transition-all border-b-2 ${
+                dashboardTab === "tailored" ? "border-cyan-500 text-cyan-600" : "border-transparent text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              Tailored Resume
+            </button>
           )}
         </div>
+
+        {dashboardTab === "checklist" ? (
+          <>
+            {/* CATEGORY SCORECARD */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <ScoreCard title="ATS Compatibility" score={gapReport.scores.atsCompatibility} />
+              <ScoreCard title="Required Skills" score={gapReport.scores.requiredSkills} />
+              <ScoreCard title="Experience Match" score={gapReport.scores.experienceMatch} />
+              <ScoreCard title="Formatting" score={gapReport.scores.formatting} />
+            </div>
+
+            {/* MISSING REQUIREMENT CARDS */}
+            <div className="mt-8">
+              <h3 className="text-lg font-display font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <CheckSquare className="w-5 h-5 text-cyan-500" />
+                Missing Requirements Checklist
+              </h3>
+              
+              {(!gapReport.missingItems || gapReport.missingItems.length === 0) ? (
+                <div className="p-8 bg-green-50 border border-green-100 rounded-2xl text-center">
+                  <CheckCircle className="w-8 h-8 text-green-500 mx-auto mb-2" />
+                  <p className="text-green-800 font-bold">All mandatory requirements met!</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {gapReport.missingItems.map((item, idx) => (
+                    <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex gap-4">
+                      
+                      {/* Checkbox for batch tailoring selection */}
+                      <div className="pt-1 select-none">
+                        <input 
+                          type="checkbox"
+                          checked={selectedItems.some(i => i.title === item.title)}
+                          onChange={() => handleToggleCheckbox(item)}
+                          className="w-5 h-5 accent-cyan-500 cursor-pointer rounded border-slate-300"
+                        />
+                      </div>
+
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            item.importance === 'Critical' ? 'bg-red-100 text-red-700' :
+                            item.importance === 'Recommended' ? 'bg-amber-100 text-amber-700' :
+                            'bg-slate-100 text-slate-700'
+                          }`}>
+                            {item.importance}
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{item.type}</span>
+                          <span className="ml-auto text-[10px] font-bold text-cyan-600 bg-cyan-50 px-2 py-1 rounded-lg">ATS Impact: {item.atsImpact}</span>
+                        </div>
+                        
+                        <h4 className="text-base font-bold text-slate-800 mb-1">{item.title}</h4>
+                        <p className="text-sm text-slate-600 mb-3">{item.reason}</p>
+                        
+                        {/* Single Fix option (Optional secondary fallback, optimized & fast) */}
+                        <div className="flex gap-2">
+                          {activeMissingItem?.title !== item.title ? (
+                            <button 
+                              onClick={() => handleFixItem(item)}
+                              className="text-xs font-bold text-cyan-600 hover:text-cyan-700 flex items-center gap-1"
+                            >
+                              <Info className="w-3.5 h-3.5" /> Explain single fix
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={() => setActiveMissingItem(null)}
+                              className="text-xs font-bold text-slate-500 hover:text-slate-600"
+                            >
+                              Hide explanation
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Tailoring Recommendation Expanded View */}
+                        <AnimatePresence>
+                          {activeMissingItem?.title === item.title && (
+                            <motion.div 
+                              initial={{ opacity: 0, height: 0 }} 
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-4 overflow-hidden"
+                            >
+                              {isTailoring ? (
+                                <div className="flex items-center gap-3 text-cyan-600 text-sm font-bold">
+                                  <RefreshCw className="w-4 h-4 animate-spin" /> Generating tailored addition...
+                                </div>
+                              ) : tailorRecommendation ? (
+                                <div className="space-y-3">
+                                  <div className="flex justify-between items-start">
+                                    <div>
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Where to add it</span>
+                                      <span className="text-sm font-bold text-slate-800 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">{tailorRecommendation.section} Section</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Evidence Status</span>
+                                      <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${tailorRecommendation.evidenceStatus.includes('Already') ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                        {tailorRecommendation.evidenceStatus}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  
+                                  <div>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Suggested Bullet / Sentence</span>
+                                    <div className="bg-white border border-cyan-200 p-3 rounded-lg text-sm text-slate-700 italic border-l-4 border-l-cyan-500">
+                                      "{tailorRecommendation.suggestedSentence}"
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="pt-2 flex gap-3">
+                                    <button onClick={() => handleMarkResolved(item)} className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
+                                      <Check className="w-3.5 h-3.5" /> Apply & Re-Validate
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                      </div>
+                      
+                      <div className="flex flex-col items-center justify-center border-l border-slate-100 pl-4 md:w-32">
+                        <span className="block text-xl font-display font-bold text-slate-800">{item.confidenceScore}%</span>
+                        <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Confidence</span>
+                      </div>
+
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* STICKY BATCH TAILOR BUTTON */}
+            {selectedItems.length > 0 && (
+              <motion.div 
+                initial={{ opacity: 0, y: 50 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-xl flex items-center gap-6 z-50 border border-slate-700"
+              >
+                <div className="text-xs">
+                  <span className="font-bold block">{selectedItems.length} Gaps Selected</span>
+                  <span className="text-slate-400">Ready to build fully tailored resume</span>
+                </div>
+                <button 
+                  onClick={handleBatchTailor}
+                  disabled={isBatchTailoring}
+                  className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all"
+                >
+                  {isBatchTailoring ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Generating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Generate Tailored Resume</span>
+                    </>
+                  )}
+                </button>
+              </motion.div>
+            )}
+          </>
+        ) : (
+          /* BATCH TAILORED RESULT VIEW */
+          <div className="space-y-6">
+            <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-100">
+              <span className="text-sm font-bold text-slate-800">Batch Tailored Content</span>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => copyToClipboard(batchResult?.tailoredContent || "")}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg flex items-center gap-1 transition-all"
+                >
+                  {copiedText ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedText ? "Copied" : "Copy"}</span>
+                </button>
+                <button 
+                  onClick={() => downloadTextFile(`${targetCompany}_Tailored_Resume.md`, batchResult?.tailoredContent || "")}
+                  className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition-all"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </button>
+              </div>
+            </div>
+
+            {/* EXPLANATIONS (Explain Every Change - Phase 14) */}
+            {batchResult?.explanations && batchResult.explanations.length > 0 && (
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
+                <h4 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-cyan-500" />
+                  Tailoring Insights & Changes Explained
+                </h4>
+                <div className="grid md:grid-cols-2 gap-4">
+                  {batchResult.explanations.map((exp, idx) => (
+                    <div key={idx} className="bg-white p-4 rounded-xl border border-slate-100 flex flex-col justify-between">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">{exp.whatChanged}</span>
+                        <p className="text-xs text-slate-600 leading-relaxed font-medium mb-3">{exp.why}</p>
+                      </div>
+                      <div className="flex justify-between items-center border-t border-slate-50 pt-2 text-[10px] font-bold">
+                        <span className="text-green-600">ATS Benefit: {exp.atsBenefit}</span>
+                        <span className="text-slate-400">Confidence: {exp.confidence}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-inner font-mono text-xs overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed text-slate-700">
+              {batchResult?.tailoredContent}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4">
+              <button 
+                onClick={async () => {
+                  // Run gap analysis on newly tailored content
+                  setStep("PROCESSING");
+                  setLoadingMessage("Validating fully tailored resume...");
+                  const parsedData = { ...parsedResume, skills: [...(parsedResume?.skills || []), ...selectedItems.map(i => i.title)] } as ParsedResume;
+                  await runGapAnalysis(parsedData, frozenProfile!);
+                }}
+                className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl flex items-center gap-2 transition-all"
+              >
+                <CheckCircle className="w-4 h-4" /> Save & Re-Validate Match Score
+              </button>
+            </div>
+          </div>
+        )}
 
       </div>
     );
