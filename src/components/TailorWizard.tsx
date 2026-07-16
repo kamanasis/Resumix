@@ -239,7 +239,7 @@ export default function TailorWizard({
               <div className="w-32 bg-slate-200 h-2 rounded-full overflow-hidden">
                 <motion.div 
                   initial={{ width: 0 }} 
-                  animate={{ width: \`\${gapReport.overallCompletion}%\` }} 
+                  animate={{ width: `${gapReport.overallCompletion}%` }} 
                   className="bg-cyan-500 h-full shadow-[0_0_8px_#22d3ee]"
                 />
               </div>
@@ -275,11 +275,11 @@ export default function TailorWizard({
                   
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2">
-                      <span className={\`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider \${
+                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                         item.importance === 'Critical' ? 'bg-red-100 text-red-700' :
                         item.importance === 'Recommended' ? 'bg-amber-100 text-amber-700' :
                         'bg-slate-100 text-slate-700'
-                      }\`}>
+                      }`}>
                         {item.importance}
                       </span>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{item.type}</span>
@@ -311,7 +311,7 @@ export default function TailorWizard({
                                 </div>
                                 <div>
                                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Evidence Status</span>
-                                  <span className={\`text-xs font-bold px-2.5 py-1 rounded-lg \${tailorRecommendation.evidenceStatus.includes('Already') ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}\`}>
+                                  <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${tailorRecommendation.evidenceStatus.includes('Already') ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                                     {tailorRecommendation.evidenceStatus}
                                   </span>
                                 </div>
@@ -464,10 +464,10 @@ function ScoreCard({ title, score }: { title: string, score: number }) {
     <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
       <div className="flex justify-between items-start mb-4">
         <span className="text-xs font-bold text-slate-500 uppercase tracking-wider w-20 leading-tight">{title}</span>
-        <span className={\`px-2 py-1 rounded-lg text-sm font-display font-bold \${colorClass}\`}>{score}%</span>
+        <span className={`px-2 py-1 rounded-lg text-sm font-display font-bold ${colorClass}`}>{score}%</span>
       </div>
       <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-        <motion.div initial={{ width: 0 }} animate={{ width: \`\${score}%\` }} className={\`h-full \${barClass}\`} />
+        <motion.div initial={{ width: 0 }} animate={{ width: `${score}%` }} className={`h-full ${barClass}`} />
       </div>
     </div>
   );
