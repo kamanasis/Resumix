@@ -382,6 +382,214 @@ Your analysis MUST return a structured JSON response matching this EXACT schema 
   }
 });
 
+// V2 Deterministic Pipeline - Phase 1: Requirement Engine
+app.post("/api/generate-requirement-profile", async (req, res) => {
+  try {
+    const { targetCompany, targetRole, jobDescription, experienceLevel } = req.body;
+    if (!targetCompany || !targetRole) {
+      return res.status(400).json({ error: "Missing required fields." });
+    }
+
+    const ai = getAI();
+    const systemPrompt = `You are an expert ATS recruitment AI. Generate a structured Requirement Profile for a candidate applying to this company. This profile will be frozen and used as the single source of truth for tailoring a resume. Do not invent requirements outside of industry standards and the provided job description.
+    Target Company: "${targetCompany}"
+    Target Job Role: "${targetRole}"
+    Experience Level: "${experienceLevel || "Not Specified"}"
+    ${jobDescription ? `Job Description: "${jobDescription}"` : ""}
+    `;
+
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        requiredSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+        preferredSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+        softSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+        responsibilities: { type: Type.ARRAY, items: { type: Type.STRING } },
+        atsKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+        experienceExpectations: { type: Type.STRING },
+        educationRequirements: { type: Type.STRING },
+        portfolioExpectations: { type: Type.STRING },
+        certifications: { type: Type.ARRAY, items: { type: Type.STRING } },
+        industryKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+        tools: { type: Type.ARRAY, items: { type: Type.STRING } },
+        technologies: { type: Type.ARRAY, items: { type: Type.STRING } },
+        leadershipExpectations: { type: Type.STRING }
+      },
+      required: ["requiredSkills", "preferredSkills", "softSkills", "responsibilities", "atsKeywords", "experienceExpectations", "educationRequirements", "portfolioExpectations", "certifications", "industryKeywords", "tools", "technologies", "leadershipExpectations"]
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
+      config: { responseMimeType: "application/json", responseSchema: schema }
+    });
+
+    res.json(JSON.parse(response.text!));
+  } catch (error: any) {
+    res.status(500).json({ error: "Failed to generate profile.", details: error.message });
+  }
+});
+
+// V2 Deterministic Pipeline - Phase 3: Resume Parser
+app.post("/api/parse-resume", async (req, res) => {
+  try {
+    const { resumeText } = req.body;
+    if (!resumeText) return res.status(400).json({ error: "Missing resume text." });
+
+    const ai = getAI();
+    const systemPrompt = `You are an expert Resume Parser. Convert the following raw text into a structured JSON representation. Extract exactly what is written. DO NOT invent or fabricate any information.`;
+    
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+        projects: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { title: {type: Type.STRING}, description: {type: Type.STRING} } } },
+        experience: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { role: {type: Type.STRING}, company: {type: Type.STRING}, duration: {type: Type.STRING}, description: {type: Type.STRING} } } },
+        achievements: { type: Type.ARRAY, items: { type: Type.STRING } },
+        education: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { degree: {type: Type.STRING}, institution: {type: Type.STRING} } } },
+        certifications: { type: Type.ARRAY, items: { type: Type.STRING } },
+        languages: { type: Type.ARRAY, items: { type: Type.STRING } },
+        tools: { type: Type.ARRAY, items: { type: Type.STRING } },
+        frameworks: { type: Type.ARRAY, items: { type: Type.STRING } },
+        softSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
+        atsKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+        summary: { type: Type.STRING },
+        responsibilities: { type: Type.ARRAY, items: { type: Type.STRING } },
+        quantifiedMetrics: { type: Type.ARRAY, items: { type: Type.STRING } }
+      },
+      required: ["skills", "projects", "experience", "achievements", "education", "certifications", "languages", "tools", "frameworks", "softSkills", "atsKeywords", "summary", "responsibilities", "quantifiedMetrics"]
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + resumeText }] }],
+      config: { responseMimeType: "application/json", responseSchema: schema }
+    });
+
+    res.json(JSON.parse(response.text!));
+  } catch (error: any) {
+    res.status(500).json({ error: "Failed to parse resume.", details: error.message });
+  }
+});
+
+// V2 Deterministic Pipeline - Phase 4: Gap Analysis
+app.post("/api/gap-analysis", async (req, res) => {
+  try {
+    const { parsedResume, frozenProfile } = req.body;
+    if (!parsedResume || !frozenProfile) return res.status(400).json({ error: "Missing data." });
+
+    const ai = getAI();
+    const systemPrompt = `You are a strict Gap Analysis Engine. 
+Compare the Parsed Resume against the Frozen Requirement Profile.
+Return ONLY the missing items. NEVER invent new requirements.
+Ensure missingItems does not exceed 10 Critical, 5 Recommended, 3 Optional.
+Calculate realistic scores (0-100) based on the match. If the match is high, give high scores.
+
+Parsed Resume: ${JSON.stringify(parsedResume)}
+Frozen Requirement Profile: ${JSON.stringify(frozenProfile)}`;
+
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        missingItems: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING, description: "Skill, ATS Keyword, Project, Achievement, Responsibility, Certification, Technology, Grammar, Formatting, or Experience" },
+              title: { type: Type.STRING },
+              importance: { type: Type.STRING, description: "Critical, Recommended, or Optional" },
+              reason: { type: Type.STRING },
+              suggestedAddition: { type: Type.STRING },
+              atsImpact: { type: Type.STRING },
+              recruiterImpact: { type: Type.STRING, description: "High, Medium, or Low" },
+              confidenceScore: { type: Type.INTEGER }
+            },
+            required: ["type", "title", "importance", "reason", "suggestedAddition", "atsImpact", "recruiterImpact", "confidenceScore"]
+          }
+        },
+        atsPresent: { type: Type.ARRAY, items: { type: Type.STRING } },
+        atsMissing: { type: Type.ARRAY, items: { type: Type.STRING } },
+        atsWeak: { type: Type.ARRAY, items: { type: Type.STRING } },
+        atsOverused: { type: Type.ARRAY, items: { type: Type.STRING } },
+        scores: {
+          type: Type.OBJECT,
+          properties: {
+            atsCompatibility: { type: Type.INTEGER },
+            requiredSkills: { type: Type.INTEGER },
+            preferredSkills: { type: Type.INTEGER },
+            experienceMatch: { type: Type.INTEGER },
+            projects: { type: Type.INTEGER },
+            achievements: { type: Type.INTEGER },
+            grammar: { type: Type.INTEGER },
+            formatting: { type: Type.INTEGER },
+            companyMatch: { type: Type.INTEGER },
+            softSkills: { type: Type.INTEGER },
+            leadership: { type: Type.INTEGER }
+          },
+          required: ["atsCompatibility", "requiredSkills", "preferredSkills", "experienceMatch", "projects", "achievements", "grammar", "formatting", "companyMatch", "softSkills", "leadership"]
+        },
+        overallCompletion: { type: Type.INTEGER },
+        isReadyToApply: { type: Type.BOOLEAN }
+      },
+      required: ["missingItems", "atsPresent", "atsMissing", "atsWeak", "atsOverused", "scores", "overallCompletion", "isReadyToApply"]
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
+      config: { responseMimeType: "application/json", responseSchema: schema }
+    });
+
+    res.json(JSON.parse(response.text!));
+  } catch (error: any) {
+    res.status(500).json({ error: "Failed gap analysis.", details: error.message });
+  }
+});
+
+// V2 Deterministic Pipeline - Phase 5: Tailoring Engine
+app.post("/api/tailor-gap", async (req, res) => {
+  try {
+    const { resumeText, frozenProfile, missingItem } = req.body;
+    if (!resumeText || !frozenProfile || !missingItem) return res.status(400).json({ error: "Missing data." });
+
+    const ai = getAI();
+    const systemPrompt = `You are a strict Resume Tailoring Engine.
+Your goal is to suggest an improvement for ONE missing checklist item.
+Do not invent additional requirements. Do not rewrite unnecessarily.
+Only fill the verified gap.
+
+Resume Context: ${resumeText.substring(0, 3000)}... (truncated for context)
+Missing Item to address: ${JSON.stringify(missingItem)}
+Frozen Profile snippet: ${JSON.stringify(frozenProfile).substring(0, 1000)}
+
+Please return EXACTLY WHERE and HOW the user should add this item to their resume, keeping it truthful and ATS-friendly. Follow the 'Where should I add it?' format.`;
+
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        section: { type: Type.STRING, description: "e.g., Skills, Experience, Project, Summary" },
+        suggestedSentence: { type: Type.STRING, description: "A truthful, ATS-friendly bullet the user can adapt." },
+        evidenceStatus: { type: Type.STRING, description: "e.g., 'Needs your confirmation before adding' or 'Already supported by your resume context'" },
+        reason: { type: Type.STRING },
+        atsImpact: { type: Type.STRING },
+        confidence: { type: Type.INTEGER }
+      },
+      required: ["section", "suggestedSentence", "evidenceStatus", "reason", "atsImpact", "confidence"]
+    };
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
+      config: { responseMimeType: "application/json", responseSchema: schema }
+    });
+
+    res.json(JSON.parse(response.text!));
+  } catch (error: any) {
+    res.status(500).json({ error: "Failed to tailor gap.", details: error.message });
+  }
+});
+
 // Setup Vite middleware / static files based on environment (skip if on Vercel serverless)
 if (!process.env.VERCEL) {
   async function setupApp() {
