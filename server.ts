@@ -29,6 +29,7 @@ import {
   validateExportReadiness
 } from "./src/lib/exportValidator";
 import { globalJobIngestionEngine } from "./src/lib/jobEngine";
+import { globalIntelligenceEngine } from "./src/lib/intelligenceEngine";
 import { ParsedResume } from "./src/types";
 
 dotenv.config({ path: ".env.local" });
@@ -1247,6 +1248,73 @@ app.get("/api/jobs/:jobId/snapshots", (req, res) => {
     return sendSuccess(res, { snapshots, count: snapshots.length });
   } catch (error: any) {
     return sendError(res, "SNAPSHOT_QUERY_FAILED", "Failed to retrieve job snapshots.", 500, error.message);
+  }
+});
+
+// ============================================================================
+// STAGE 7: UNIVERSAL COMPANY & ROLE INTELLIGENCE API ROUTES
+// ============================================================================
+
+app.post("/api/intelligence/company", async (req, res) => {
+  try {
+    const { companyName } = req.body;
+    if (!companyName || typeof companyName !== "string") {
+      return sendError(res, "INVALID_COMPANY_NAME", "companyName is required.", 400);
+    }
+    const profile = await globalIntelligenceEngine.getCompanyIntelligence(companyName);
+    return sendSuccess(res, profile);
+  } catch (error: any) {
+    return sendError(res, "COMPANY_INTELLIGENCE_FAILED", "Failed to calculate company intelligence.", 500, error.message);
+  }
+});
+
+app.post("/api/intelligence/role", async (req, res) => {
+  try {
+    const { roleName, companyName } = req.body;
+    if (!roleName || typeof roleName !== "string") {
+      return sendError(res, "INVALID_ROLE_NAME", "roleName is required.", 400);
+    }
+    const profile = await globalIntelligenceEngine.getRoleIntelligence(roleName, companyName);
+    return sendSuccess(res, profile);
+  } catch (error: any) {
+    return sendError(res, "ROLE_INTELLIGENCE_FAILED", "Failed to calculate role intelligence.", 500, error.message);
+  }
+});
+
+app.post("/api/intelligence/analyze", async (req, res) => {
+  try {
+    const { companyName, roleName, resumeSkills } = req.body;
+    if (!companyName || !roleName) {
+      return sendError(res, "INVALID_INPUT", "Both companyName and roleName are required.", 400);
+    }
+    const analysis = await globalIntelligenceEngine.analyzeTargetIntelligence({
+      companyName,
+      roleName,
+      resumeSkills: Array.isArray(resumeSkills) ? resumeSkills : []
+    });
+    return sendSuccess(res, analysis);
+  } catch (error: any) {
+    return sendError(res, "INTELLIGENCE_ANALYSIS_FAILED", "Failed to analyze target intelligence.", 500, error.message);
+  }
+});
+
+app.get("/api/intelligence/company/:companyId", async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const profile = await globalIntelligenceEngine.getCompanyIntelligence(companyId);
+    return sendSuccess(res, profile);
+  } catch (error: any) {
+    return sendError(res, "COMPANY_QUERY_FAILED", "Failed to query company intelligence.", 500, error.message);
+  }
+});
+
+app.get("/api/intelligence/role/:roleId", async (req, res) => {
+  try {
+    const { roleId } = req.params;
+    const profile = await globalIntelligenceEngine.getRoleIntelligence(roleId);
+    return sendSuccess(res, profile);
+  } catch (error: any) {
+    return sendError(res, "ROLE_QUERY_FAILED", "Failed to query role intelligence.", 500, error.message);
   }
 });
 

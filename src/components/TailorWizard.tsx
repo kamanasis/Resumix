@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { ResumeFile, GapReport, RequirementProfile, ParsedResume, MissingItem, TailorRecommendation } from "../types";
 import { 
-  Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, 
+  Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, TrendingDown,
   Compass, Info, Cpu, AlertTriangle, CheckSquare, Lock, 
   RefreshCw, XCircle, ArrowLeft, Printer, FileText, FileSpreadsheet,
-  Link, Globe, ExternalLink
+  Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
@@ -61,8 +61,41 @@ export default function TailorWizard({
   const [selectedItems, setSelectedItems] = useState<MissingItem[]>([]);
   const [batchResult, setBatchResult] = useState<{ tailoredContent: string; explanations: any[] } | null>(null);
   const [isBatchTailoring, setIsBatchTailoring] = useState(false);
-  const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored">("checklist");
+  const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored" | "intelligence">("checklist");
   const [copiedText, setCopiedText] = useState(false);
+
+  // Stage 7: Market & Role Intelligence states
+  const [marketIntelligence, setMarketIntelligence] = useState<any | null>(null);
+  const [isLoadingIntelligence, setIsLoadingIntelligence] = useState(false);
+  const [intelligenceError, setIntelligenceError] = useState<string | null>(null);
+
+  const fetchMarketIntelligence = async (company: string, role: string, candidateSkills: string[] = []) => {
+    if (!company && !role) return;
+    setIsLoadingIntelligence(true);
+    setIntelligenceError(null);
+    try {
+      const res = await fetch("/api/intelligence/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: company,
+          roleTitle: role,
+          candidateSkills
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.data) {
+        setMarketIntelligence(data.data);
+      } else {
+        setIntelligenceError(data.error?.message || "Could not retrieve market intelligence.");
+      }
+    } catch (err: any) {
+      console.warn("Intelligence fetch failed:", err);
+      setIntelligenceError(err.message || "Failed to load market intelligence.");
+    } finally {
+      setIsLoadingIntelligence(false);
+    }
+  };
 
   // Cross-Resume State Isolation (Part 26 - Resume Version Integrity)
   React.useEffect(() => {
@@ -74,6 +107,8 @@ export default function TailorWizard({
     setBatchResult(null);
     setActiveMissingItem(null);
     setTailorRecommendation(null);
+    setMarketIntelligence(null);
+    setIntelligenceError(null);
     setErrorDetails({ title: "", message: "" });
   }, [selectedResume?.id]);
 
@@ -183,6 +218,10 @@ export default function TailorWizard({
     }
     const gapData: GapReport = gapJson.data;
     setGapReport(gapData);
+
+    // Stage 7: Fetch Market & Role Intelligence patterns
+    const candidateSkills = parsed?.skills?.map((s) => s.name) || [];
+    fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
 
     // Save only verified real gap reports to Firestore
     try {
@@ -550,9 +589,34 @@ export default function TailorWizard({
               Tailored Draft
             </button>
           )}
+          <button 
+            onClick={() => {
+              setDashboardTab("intelligence");
+              if (!marketIntelligence && !isLoadingIntelligence) {
+                const candidateSkills = parsedResume?.skills?.map((s) => s.name) || [];
+                fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
+              }
+            }}
+            className={`px-6 py-3 font-display font-bold text-sm transition-all border-b-2 flex items-center gap-2 ${
+              dashboardTab === "intelligence" ? "border-cyan-500 text-cyan-600" : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            <BarChart3 className="w-4 h-4" />
+            Market Intelligence
+            {marketIntelligence && (
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                marketIntelligence.evidenceStrength === "STRONG_EVIDENCE" ? "bg-emerald-100 text-emerald-700" :
+                marketIntelligence.evidenceStrength === "MODERATE_EVIDENCE" ? "bg-cyan-100 text-cyan-700" :
+                marketIntelligence.evidenceStrength === "LIMITED_EVIDENCE" ? "bg-amber-100 text-amber-700" :
+                "bg-slate-100 text-slate-600"
+              }`}>
+                {marketIntelligence.evidenceStrength?.replace("_EVIDENCE", "") || "DATA"}
+              </span>
+            )}
+          </button>
         </div>
 
-        {dashboardTab === "checklist" ? (
+        {dashboardTab === "checklist" && (
           <>
             {/* CATEGORY SCORECARD (Calculated from Real Data) */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -737,7 +801,9 @@ export default function TailorWizard({
               </motion.div>
             )}
           </>
-        ) : (
+        )}
+
+        {dashboardTab === "tailored" && batchResult && (
           /* BATCH TAILORED RESULT VIEW */
           <div className="space-y-6">
             {/* FINALITY BADGE & METRIC BAR */}
@@ -778,66 +844,68 @@ export default function TailorWizard({
               )}
             </div>
 
-            {exportError && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-700 text-xs font-semibold">
-                <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
-                <span>{exportError}</span>
+            {/* EXPORT ACTION BUTTONS */}
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-200 shadow-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-700">Verified Formats:</span>
+                <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono font-medium">PDF (ATS Print)</span>
+                <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono font-medium">DOCX (Native)</span>
+                <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono font-medium">Plain Text</span>
               </div>
-            )}
 
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200">
-              <span className="text-sm font-bold text-slate-800">Export Tailored Resume</span>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex items-center gap-2">
                 <button 
-                  onClick={() => copyToClipboard(batchResult?.tailoredContent || "")}
-                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg flex items-center gap-1 transition-all"
-                  title="Copy formatted markdown to clipboard"
-                >
-                  {copiedText ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedText ? "Copied" : "Copy"}</span>
-                </button>
-                <button 
-                  onClick={() => handleExport("pdf")}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
-                  title="Export cleanly formatted PDF"
+                  onClick={handleExportPdf}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
+                  title="Print / Save as clean ATS PDF"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>PDF / Print</span>
+                  <span>Print PDF</span>
                 </button>
+
                 <button 
-                  onClick={() => handleExport("docx")}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
-                  title="Export standard Word .docx document"
+                  onClick={handleExportDocx}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
+                  title="Export native Microsoft Word document"
                 >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Word (.docx)</span>
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Export DOCX</span>
                 </button>
+
                 <button 
-                  onClick={() => handleExport("md")}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
-                  title="Export raw Markdown format"
+                  onClick={handleCopyDraft}
+                  className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
+                  title="Copy full text to clipboard"
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Markdown</span>
+                  {copiedText ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Copy Text</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
 
-            {/* EXPLANATIONS */}
-            {batchResult?.explanations && batchResult.explanations.length > 0 && (
+            {/* AUDIT LOG & EXPLANATIONS */}
+            {batchResult.explanations && batchResult.explanations.length > 0 && (
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
-                <h4 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-cyan-500" />
-                  Tailoring Changes Explained
-                </h4>
-                <div className="grid md:grid-cols-2 gap-4">
-                  {batchResult.explanations.map((exp, idx) => (
-                    <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col justify-between">
-                      <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">{exp.whatChanged}</span>
-                        <p className="text-xs text-slate-600 leading-relaxed font-medium mb-3">{exp.why}</p>
+                <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-1.5">
+                  <Cpu className="w-4 h-4 text-cyan-600" /> Tailoring Action Audit Trail
+                </h5>
+                <div className="space-y-2">
+                  {batchResult.explanations.map((exp: any, idx: number) => (
+                    <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 text-xs space-y-1">
+                      <div className="flex justify-between">
+                        <strong className="text-slate-800">{exp.requirement}</strong>
+                        <span className="text-cyan-700 font-semibold">{exp.actionTaken}</span>
                       </div>
-                      <div className="flex justify-between items-center border-t border-slate-100 pt-2 text-[10px] font-bold">
+                      <div className="flex gap-4 text-[11px]">
                         <span className="text-green-600">ATS Benefit: {exp.atsBenefit}</span>
                         <span className="text-slate-400">Recruiter: {exp.recruiterBenefit}</span>
                       </div>
@@ -875,6 +943,317 @@ export default function TailorWizard({
                 <CheckCircle className="w-4 h-4" /> Save & Re-Validate Match Score
               </button>
             </div>
+          </div>
+        )}
+
+        {dashboardTab === "intelligence" && (
+          /* STAGE 7: UNIVERSAL MARKET & ROLE INTELLIGENCE VIEW */
+          <div className="space-y-6">
+            {/* INTEL HEADER */}
+            <div className="bg-white/80 backdrop-blur-md border border-slate-200 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="px-2.5 py-1 bg-cyan-100 text-cyan-800 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5">
+                    <BarChart3 className="w-3.5 h-3.5 text-cyan-600" />
+                    Market & Role Intelligence
+                  </span>
+                  {marketIntelligence && (
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                      marketIntelligence.evidenceStrength === "STRONG_EVIDENCE" ? "bg-emerald-100 text-emerald-800 border border-emerald-300" :
+                      marketIntelligence.evidenceStrength === "MODERATE_EVIDENCE" ? "bg-cyan-100 text-cyan-800 border border-cyan-300" :
+                      marketIntelligence.evidenceStrength === "LIMITED_EVIDENCE" ? "bg-amber-100 text-amber-800 border border-amber-300" :
+                      "bg-slate-100 text-slate-700 border border-slate-300"
+                    }`}>
+                      {marketIntelligence.evidenceStrength.replace("_", " ")}
+                    </span>
+                  )}
+                </div>
+                <h3 className="text-xl font-display font-bold text-slate-900">
+                  Observed Hiring Patterns for {targetRole || "Role"}
+                  {targetCompany && <span className="text-slate-400"> at </span>}
+                  {targetCompany}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {marketIntelligence ? (
+                    <span>
+                      Synthesized from <strong>{marketIntelligence.totalPostingsAnalyzed}</strong> verified job postings (Dataset {marketIntelligence.datasetVersion})
+                    </span>
+                  ) : (
+                    <span>Universal cross-posting market frequency & qualification analytics</span>
+                  )}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const candidateSkills = parsedResume?.skills?.map((s) => s.name) || [];
+                    fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
+                  }}
+                  disabled={isLoadingIntelligence}
+                  className="px-4 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingIntelligence ? "animate-spin text-cyan-600" : "text-slate-500"}`} />
+                  <span>{isLoadingIntelligence ? "Analyzing Postings..." : "Refresh Intelligence"}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* STATUTORY NON-MISLEADING DISCLAIMER (MANDATORY TRANSPARENCY) */}
+            <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl flex items-start gap-3">
+              <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-xs text-amber-900">
+                <strong className="font-bold block mb-0.5">Empirical Job-Posting Pattern Disclosures:</strong>
+                {marketIntelligence?.disclaimer || (
+                  "Statistical Market Observation: These percentages and co-occurrence patterns describe observed job-posting requirements from verified public data sources. They represent market patterns and are NOT hiring, interview, or rejection decisions made by employers."
+                )}
+              </div>
+            </div>
+
+            {/* ERROR OR LOADING STATE */}
+            {isLoadingIntelligence && (
+              <div className="p-12 bg-white border border-slate-200 rounded-3xl text-center space-y-3">
+                <RefreshCw className="w-8 h-8 text-cyan-500 animate-spin mx-auto" />
+                <h4 className="font-bold text-slate-800 text-sm">Aggregating Verified Market Snapshots...</h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Calculating deterministic frequency distributions, co-occurrences, and sample-size basis across real job postings.
+                </p>
+              </div>
+            )}
+
+            {!isLoadingIntelligence && intelligenceError && (
+              <div className="p-6 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-800 text-xs">
+                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
+                <span>{intelligenceError}</span>
+              </div>
+            )}
+
+            {/* MAIN INTELLIGENCE CONTENT */}
+            {!isLoadingIntelligence && marketIntelligence && (
+              <div className="space-y-6">
+                {/* SAMPLE SIZE & BASIS BANNER */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Postings Analyzed</span>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl font-bold font-display text-slate-900">
+                        {marketIntelligence.totalPostingsAnalyzed}
+                      </span>
+                      <span className="text-xs text-slate-500">public verified specs</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Evidence Quality Tier</span>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-bold font-display text-slate-900">
+                        {marketIntelligence.evidenceStrength.replace("_EVIDENCE", "").replace("_DATA", "")}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {marketIntelligence.evidenceStrength === "STRONG_EVIDENCE" ? "(30+ Postings)" :
+                         marketIntelligence.evidenceStrength === "MODERATE_EVIDENCE" ? "(10–29 Postings)" :
+                         marketIntelligence.evidenceStrength === "LIMITED_EVIDENCE" ? "(3–9 Postings)" :
+                         "(<3 Postings)"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Dataset Hash & Version</span>
+                    <div className="font-mono text-xs text-slate-700 truncate" title={marketIntelligence.datasetVersion}>
+                      {marketIntelligence.datasetVersion}
+                    </div>
+                  </div>
+                </div>
+
+                {/* INSUFFICIENT DATA NOTICE IF UNDER 3 POSTINGS */}
+                {marketIntelligence.totalPostingsAnalyzed < 3 && (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-600 flex items-start gap-3">
+                    <ShieldAlert className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-slate-800 block">Limited Initial Sample Size ({marketIntelligence.totalPostingsAnalyzed} Postings)</strong>
+                      Import more public job posting URLs for {targetCompany || "this role"} in the Setup tab using Stage 6 Job Ingestion to deepen the statistical profile.
+                    </div>
+                  </div>
+                )}
+
+                {/* CANDIDATE SKILL COVERAGE VS MARKET PATTERNS */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* MATCHING VERIFIED SKILLS */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        Skills You Possess (Market High-Demand)
+                      </h4>
+                      <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                        {marketIntelligence.candidateMatchingRequirements?.length || 0}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      Verified skills from your resume that frequently appear in postings for this role.
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {marketIntelligence.candidateMatchingRequirements?.length > 0 ? (
+                        marketIntelligence.candidateMatchingRequirements.map((req: string, idx: number) => (
+                          <span key={idx} className="px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-lg flex items-center gap-1.5">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            {req}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">No common market skills matched yet.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* FREQUENT MARKET PATTERNS NOT IN CURRENT RESUME */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                        <Compass className="w-4 h-4 text-cyan-600" />
+                        Frequent Market Requirements (Not In Resume)
+                      </h4>
+                      <span className="text-xs font-bold text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-full">
+                        {marketIntelligence.candidateMissingFrequentRequirements?.length || 0}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      Frequently observed in peer postings. <em>(Market observation only — not assigned to you unless truthful)</em>.
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {marketIntelligence.candidateMissingFrequentRequirements?.length > 0 ? (
+                        marketIntelligence.candidateMissingFrequentRequirements.map((item: any, idx: number) => (
+                          <span key={idx} className="px-3 py-1 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-medium rounded-lg flex items-center gap-2">
+                            <span>{item.requirementName}</span>
+                            <span className="text-[10px] font-bold text-cyan-600 bg-cyan-50 px-1.5 py-0.5 rounded">
+                              {item.frequencyPercentage}%
+                            </span>
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">You possess all frequent market requirements analyzed!</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* REQUIREMENT FREQUENCIES BREAKDOWN (0% - 100%) */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-cyan-600" />
+                        Empirical Requirement Frequency Distribution
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Exact appearance frequency across {marketIntelligence.totalPostingsAnalyzed} analyzed postings. Zero-division safe.
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold text-slate-400">
+                      Sorted by Frequency
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 pt-2">
+                    {marketIntelligence.topRequirements?.length > 0 ? (
+                      marketIntelligence.topRequirements.map((req: any, idx: number) => (
+                        <div key={idx} className="p-3 bg-slate-50/70 hover:bg-slate-50 border border-slate-100 rounded-xl transition-all space-y-1.5">
+                          <div className="flex justify-between items-center text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-800">{req.requirementName}</span>
+                              <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-500 font-semibold">
+                                {req.category}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-slate-500 text-[11px]">
+                                {req.occurrences} of {req.totalPostingsEvaluated} postings ({req.requiredOccurrences} mandatory, {req.preferredOccurrences} preferred)
+                              </span>
+                              <span className="font-bold text-cyan-700 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded-md text-xs">
+                                {req.frequencyPercentage}%
+                              </span>
+                            </div>
+                          </div>
+                          {/* PROGRESS BAR */}
+                          <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                            <div 
+                              className="bg-cyan-500 h-full rounded-full transition-all duration-500"
+                              style={{ width: `${Math.min(100, Math.max(0, req.frequencyPercentage))}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-slate-400 italic text-center py-4">No requirement statistics available yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* CO-OCCURRENCE PATTERNS & TREND VELOCITY */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* CO-OCCURRENCE */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+                    <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <Cpu className="w-4 h-4 text-purple-600" />
+                      Statistically Co-Occurring Technologies
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      Technologies frequently requested together in public postings (non-causal).
+                    </p>
+                    <div className="space-y-2 pt-1">
+                      {marketIntelligence.coOccurrences?.length > 0 ? (
+                        marketIntelligence.coOccurrences.slice(0, 6).map((co: any, idx: number) => (
+                          <div key={idx} className="flex justify-between items-center p-2.5 bg-purple-50/40 border border-purple-100 rounded-xl text-xs">
+                            <span className="font-bold text-purple-900">
+                              {co.requirementA} + {co.requirementB}
+                            </span>
+                            <span className="text-[10px] font-bold text-purple-700 bg-purple-100/70 px-2 py-0.5 rounded-full">
+                              {co.coOccurrencePercentage}% ({co.coOccurrenceCount} postings)
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">No co-occurrences detected with sufficient sample size.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* TREND DIRECTION */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+                    <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-emerald-600" />
+                      Observed Temporal Velocity
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      Directional change between chronological snapshot samples.
+                    </p>
+                    <div className="space-y-2 pt-1">
+                      {marketIntelligence.trends?.length > 0 ? (
+                        marketIntelligence.trends.slice(0, 6).map((tr: any, idx: number) => (
+                          <div key={idx} className="flex justify-between items-center p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs">
+                            <span className="font-bold text-slate-800">{tr.requirementName}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
+                              tr.direction === "TRENDING_UP" ? "bg-emerald-100 text-emerald-800" :
+                              tr.direction === "TRENDING_DOWN" ? "bg-red-100 text-red-800" :
+                              tr.direction === "STABLE" ? "bg-slate-200 text-slate-700" :
+                              "bg-slate-100 text-slate-500"
+                            }`}>
+                              {tr.direction === "TRENDING_UP" && <TrendingUp className="w-3 h-3 text-emerald-600" />}
+                              {tr.direction === "TRENDING_DOWN" && <TrendingDown className="w-3 h-3 text-red-600" />}
+                              {tr.direction.replace("_", " ")} ({tr.changePercentage > 0 ? `+${tr.changePercentage}%` : `${tr.changePercentage}%`})
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">Sufficient chronological splits needed to evaluate velocity.</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

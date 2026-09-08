@@ -527,5 +527,175 @@ export interface JobFetchResult {
   };
 }
 
+// ============================================================================
+// STAGE 7: UNIVERSAL COMPANY & ROLE INTELLIGENCE TYPES
+// ============================================================================
 
+export type EvidenceStrength =
+  | "INSUFFICIENT_DATA"
+  | "LIMITED_EVIDENCE"
+  | "MODERATE_EVIDENCE"
+  | "STRONG_EVIDENCE";
 
+export type EvidenceClaimType =
+  | "JOB_FREQUENCY"
+  | "ROLE_PATTERN"
+  | "TREND"
+  | "CO_OCCURRENCE"
+  | "USER_PROVIDED"
+  | "OUTCOME_DATA";
+
+export type ClaimConfidenceTier =
+  | "VERIFIED_FACT"
+  | "OBSERVED_PATTERN"
+  | "USER_PROVIDED"
+  | "INFERENCE"
+  | "INSUFFICIENT_DATA";
+
+export type RequirementTrendDirection =
+  | "TRENDING_UP"
+  | "TRENDING_DOWN"
+  | "STABLE"
+  | "INSUFFICIENT_DATA";
+
+export interface RequirementFrequency {
+  canonicalName: string;
+  requirementName?: string;
+  category: RequirementCategory;
+  occurrences: number;
+  totalRelevantJobs: number;
+  totalPostingsEvaluated?: number;
+  frequency: number; // strictly 0.0 to 1.0 (0% to 100%)
+  frequencyPercentage?: number; // 0 to 100
+  requiredOccurrences: number;
+  preferredOccurrences: number;
+  optionalOccurrences: number;
+  evidenceJobIds: string[];
+  evidenceSnapshotIds: string[];
+  evidenceClaimType?: EvidenceClaimType;
+  confidenceTier?: ClaimConfidenceTier;
+}
+
+export interface ExperiencePattern {
+  level: string;
+  jobCount: number;
+  percentage: number;
+  topRequirements: string[];
+}
+
+export interface LocationPattern {
+  location: string;
+  jobCount: number;
+  percentage: number;
+  topRequirements: string[];
+  isRemote?: boolean;
+  count?: number;
+}
+
+export interface RoleFamilyPattern {
+  canonicalRole: string;
+  roleTitle?: string;
+  postingCount?: number;
+  jobCount: number;
+  commonTitles: string[];
+  requirementDistribution: RequirementFrequency[];
+  experienceDistribution: ExperiencePattern[];
+  locationDistribution: LocationPattern[];
+  percentage?: number;
+}
+
+export interface RequirementTrend {
+  canonicalName: string;
+  requirementName?: string;
+  direction: RequirementTrendDirection;
+  historicalFrequency: number;
+  recentFrequency: number;
+  delta: number;
+  changePercentage?: number;
+  timeWindowDays?: number;
+}
+
+export interface CompanyIntelligenceProfile {
+  profileId: string;
+  companyId: string;
+  companyName: string;
+  sampleSize: number;
+  analyzedJobCount: number;
+  rolesAnalyzed: number;
+  locationsAnalyzed: number;
+  timeRange?: {
+    start: string;
+    end: string;
+  };
+  topRequirements: RequirementFrequency[];
+  roleFamilies: RoleFamilyPattern[];
+  experiencePatterns: ExperiencePattern[];
+  locationPatterns: LocationPattern[];
+  trendData: RequirementTrend[];
+  evidenceQuality: EvidenceStrength;
+  datasetVersion: string;
+  generatedAt: string;
+}
+
+export interface RoleIntelligenceProfile {
+  profileId: string;
+  canonicalRole: string;
+  targetCompany?: string;
+  sampleSize: number;
+  requirementDistribution: RequirementFrequency[];
+  requiredSkills: RequirementFrequency[];
+  preferredSkills: RequirementFrequency[];
+  coOccurrences: {
+    skills: [string, string];
+    count: number;
+    percentage: number;
+  }[];
+  evidenceStrength: EvidenceStrength;
+  datasetVersion: string;
+  generatedAt: string;
+}
+
+export interface IntelligenceDatasetVersion {
+  versionId: string;
+  generatedAt: string;
+  jobCount: number;
+  snapshotCount: number;
+  companyCount: number;
+  roleCount: number;
+  timeRange: {
+    start: string;
+    end: string;
+  };
+}
+
+export interface IntelligenceEvidence {
+  statementId: string;
+  claimType: EvidenceClaimType;
+  confidenceTier: ClaimConfidenceTier;
+  sourceJobIds: string[];
+  sourceSnapshotIds: string[];
+  sourceQuotes?: string[];
+  sampleSize: number;
+  generatedAt: string;
+}
+
+export interface CandidateOutcomeRecord {
+  outcomeId: string;
+  jobId: string;
+  snapshotId: string;
+  candidateProfileHash: string;
+  outcome:
+    | "APPLIED"
+    | "REJECTED"
+    | "SCREEN"
+    | "INTERVIEW"
+    | "OFFER"
+    | "HIRED"
+    | "UNKNOWN";
+  sourceType:
+    | "USER_PROVIDED"
+    | "LICENSED_DATASET"
+    | "AUTHORIZED_IMPORT";
+  verified: boolean;
+  createdAt: string;
+}
