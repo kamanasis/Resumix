@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { ResumeFile, GapReport, RequirementProfile, ParsedResume, MissingItem, TailorRecommendation } from "../types";
 import { 
-  Sparkles, Send, CheckCircle, FileCheck, Download, Copy, Check, TrendingUp, 
-  Compass, Briefcase, Info, ListTodo, Cpu, AlertTriangle, Key, FileText, 
-  CheckSquare, MapPin, UserCheck, Globe, Building, Award, Terminal, Plus, Lock, 
-  ChevronRight, CircleDashed, ChevronDown, ChevronUp, RefreshCw, XCircle
+  Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, 
+  Compass, Info, Cpu, AlertTriangle, CheckSquare, Lock, 
+  RefreshCw, XCircle, ArrowLeft
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
@@ -27,17 +26,17 @@ export default function TailorWizard({
   const [experienceLevel, setExperienceLevel] = useState("1–2 years");
   const [jobDescription, setJobDescription] = useState("");
 
-  // Pipeline states
-  const [step, setStep] = useState<"SETUP" | "PROCESSING" | "DASHBOARD" | "LOCKED">("SETUP");
+  // Pipeline states (Part 3 - Fail Closed)
+  const [step, setStep] = useState<"SETUP" | "PROCESSING" | "DASHBOARD" | "LOCKED" | "ERROR">("SETUP");
   const [loadingMessage, setLoadingMessage] = useState("");
-  const [error, setError] = useState("");
+  const [errorDetails, setErrorDetails] = useState<{ title: string; message: string }>({ title: "", message: "" });
 
   // Data states
   const [frozenProfile, setFrozenProfile] = useState<RequirementProfile | null>(null);
   const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null);
   const [gapReport, setGapReport] = useState<GapReport | null>(null);
   
-  // Single-issue Tailoring UI state (Legacy but optimized for reference/single view)
+  // Single-issue Tailoring UI state
   const [activeMissingItem, setActiveMissingItem] = useState<MissingItem | null>(null);
   const [tailorRecommendation, setTailorRecommendation] = useState<TailorRecommendation | null>(null);
   const [isTailoring, setIsTailoring] = useState(false);
@@ -49,51 +48,76 @@ export default function TailorWizard({
   const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored">("checklist");
   const [copiedText, setCopiedText] = useState(false);
 
-  const startPipeline = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const startPipeline = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    
     if (!selectedResume) {
-      setError("Please select or upload a resume from your files first.");
+      setErrorDetails({
+        title: "No Resume Selected",
+        message: "Please select or upload a resume from your Resume Vault before starting the analysis."
+      });
+      setStep("ERROR");
       return;
     }
-    if (!targetCompany || !targetRole) {
-      setError("Please fill in target company name and target job role.");
+    if (!targetCompany.trim() || !targetRole.trim()) {
+      setErrorDetails({
+        title: "Missing Target Information",
+        message: "Target company name and target job role are required to extract valid requirements."
+      });
+      setStep("ERROR");
       return;
     }
 
     setStep("PROCESSING");
-    setError("");
+    setErrorDetails({ title: "", message: "" });
 
     try {
-      // 1. Generate Requirement Profile
+      // Phase 1: Generate Requirement Profile
       setLoadingMessage("Phase 1: Generating Frozen Requirement Profile...");
       const profileRes = await fetch("/api/generate-requirement-profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targetCompany, targetRole, jobDescription, experienceLevel })
+        body: JSON.stringify({ 
+          targetCompany: targetCompany.trim(), 
+          targetRole: targetRole.trim(), 
+          jobDescription: jobDescription.trim(), 
+          experienceLevel 
+        })
       });
-      if (!profileRes.ok) throw new Error("Failed to generate requirement profile");
-      const profileData = await profileRes.json();
+      
+      const profileJson = await profileRes.json();
+      if (!profileRes.ok || !profileJson.success || !profileJson.data) {
+        throw new Error(profileJson.error?.message || "Requirement engine failed to extract verified requirements.");
+      }
+      const profileData: RequirementProfile = profileJson.data;
       setFrozenProfile(profileData);
 
-      // 2. Parse Resume
+      // Phase 2: Parse Resume Structure
       setLoadingMessage("Phase 2: Parsing Current Resume Structure...");
       const parseRes = await fetch("/api/parse-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resumeText: selectedResume.content })
       });
-      if (!parseRes.ok) throw new Error("Failed to parse resume");
-      const parsedData = await parseRes.json();
+
+      const parseJson = await parseRes.json();
+      if (!parseRes.ok || !parseJson.success || !parseJson.data) {
+        throw new Error(parseJson.error?.message || "Resume parser failed to extract structured entities.");
+      }
+      const parsedData: ParsedResume = parseJson.data;
       setParsedResume(parsedData);
 
-      // 3. Gap Analysis
-      setLoadingMessage("Phase 3: Performing Gap Analysis...");
+      // Phase 3 & 4: Objective Gap Analysis
+      setLoadingMessage("Phase 3: Performing Strict Gap Analysis...");
       await runGapAnalysis(parsedData, profileData);
       
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || "An error occurred during the tailoring pipeline.");
-      setStep("SETUP");
+      console.error("Pipeline failure:", err);
+      setErrorDetails({
+        title: "Analysis Unavailable",
+        message: err.message || "Resumix could not complete the analysis because the service returned an invalid response."
+      });
+      setStep("ERROR");
     }
   };
 
@@ -104,21 +128,29 @@ export default function TailorWizard({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ parsedResume: parsed, frozenProfile: profile })
     });
-    if (!gapRes.ok) throw new Error("Failed gap analysis");
-    const gapData: GapReport = await gapRes.json();
+
+    const gapJson = await gapRes.json();
+    if (!gapRes.ok || !gapJson.success || !gapJson.data) {
+      throw new Error(gapJson.error?.message || "Gap analysis engine failed to calculate verified matches.");
+    }
+    const gapData: GapReport = gapJson.data;
     setGapReport(gapData);
 
-    // Save to Firestore
-    const gapReportId = doc(collection(db, "users", userId, "gapReports")).id;
-    await setDoc(doc(db, "users", userId, "gapReports", gapReportId), {
-      ...gapData,
-      id: gapReportId,
-      userId,
-      resumeId: selectedResume?.id,
-      createdAt: new Date().toISOString()
-    });
+    // Save only verified real gap reports to Firestore
+    try {
+      const gapReportId = doc(collection(db, "users", userId, "gapReports")).id;
+      await setDoc(doc(db, "users", userId, "gapReports", gapReportId), {
+        ...gapData,
+        id: gapReportId,
+        userId,
+        resumeId: selectedResume?.id,
+        createdAt: new Date().toISOString()
+      });
+    } catch (saveErr) {
+      console.warn("Could not save gap report to Firestore:", saveErr);
+    }
 
-    if (gapData.isReadyToApply || gapData.overallCompletion >= 97) {
+    if (gapData.isReadyToApply) {
       setStep("LOCKED");
     } else {
       setStep("DASHBOARD");
@@ -141,11 +173,14 @@ export default function TailorWizard({
           missingItem: item
         })
       });
-      if (!res.ok) throw new Error("Failed to tailor gap");
       const data = await res.json();
-      setTailorRecommendation(data);
+      if (!res.ok || !data.success || !data.data) {
+        throw new Error(data.error?.message || "Failed to generate single fix recommendation.");
+      }
+      setTailorRecommendation(data.data);
     } catch (err: any) {
       console.error(err);
+      setActiveMissingItem(null);
     } finally {
       setIsTailoring(false);
     }
@@ -162,7 +197,6 @@ export default function TailorWizard({
   const handleBatchTailor = async () => {
     if (selectedItems.length === 0) return;
     setIsBatchTailoring(true);
-    setError("");
 
     try {
       const res = await fetch("/api/tailor-resume-batch", {
@@ -174,13 +208,19 @@ export default function TailorWizard({
           selectedItems
         })
       });
-      if (!res.ok) throw new Error("Failed to perform batch tailoring.");
       const data = await res.json();
-      setBatchResult(data);
+      if (!res.ok || !data.success || !data.data) {
+        throw new Error(data.error?.message || "Failed to perform batch tailoring.");
+      }
+      setBatchResult(data.data);
       setDashboardTab("tailored");
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || "An error occurred during batch tailoring.");
+      console.error("Batch tailor error:", err);
+      setErrorDetails({
+        title: "Batch Tailoring Error",
+        message: err.message || "Failed to generate tailored resume."
+      });
+      setStep("ERROR");
     } finally {
       setIsBatchTailoring(false);
     }
@@ -189,14 +229,23 @@ export default function TailorWizard({
   const handleMarkResolved = async (item: MissingItem) => {
     if (!gapReport || !parsedResume || !frozenProfile) return;
     
-    // Optimistically remove the item and re-run gap analysis
     setStep("PROCESSING");
-    setLoadingMessage("Re-validating Resume...");
+    setLoadingMessage("Re-validating Resume against requirements...");
     
     const updatedParsed = { ...parsedResume };
-    if (item.type === "Skill" || item.type === "Technology") updatedParsed.skills.push(item.title);
+    if (item.type === "Skill" || item.type === "Technology") {
+      updatedParsed.skills = [...updatedParsed.skills, item.title];
+    }
     
-    await runGapAnalysis(updatedParsed, frozenProfile);
+    try {
+      await runGapAnalysis(updatedParsed, frozenProfile);
+    } catch (err: any) {
+      setErrorDetails({
+        title: "Re-validation Error",
+        message: err.message || "Failed to re-evaluate updated resume."
+      });
+      setStep("ERROR");
+    }
     setActiveMissingItem(null);
     setTailorRecommendation(null);
   };
@@ -218,7 +267,7 @@ export default function TailorWizard({
   };
 
   // -------------------------------------------------------------------------------- //
-  // UI COMPONENTS
+  // UI STATES: PROCESSING, ERROR, LOCKED, DASHBOARD, SETUP
   // -------------------------------------------------------------------------------- //
 
   if (step === "PROCESSING") {
@@ -231,42 +280,81 @@ export default function TailorWizard({
         />
         <h3 className="text-slate-800 font-display font-bold text-xl mb-2">Deterministic Engine Running</h3>
         <p className="text-cyan-600 text-sm font-semibold mb-4">{loadingMessage}</p>
+        <span className="text-xs text-slate-400">Performing objective requirement mapping without data fabrication...</span>
+      </div>
+    );
+  }
+
+  // FAIL CLOSED ERROR STATE (Part 3 & 21)
+  if (step === "ERROR") {
+    return (
+      <div className="py-12 flex flex-col items-center justify-center text-center bg-red-50/70 backdrop-blur-xl border border-red-200 rounded-3xl p-8 shadow-sm animate-fadeIn">
+        <div className="w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mb-4 border border-red-200">
+          <XCircle className="w-8 h-8" />
+        </div>
+        <h3 className="text-red-900 font-display font-bold text-2xl mb-2">
+          {errorDetails.title || "Analysis Unavailable"}
+        </h3>
+        <p className="text-red-700 text-sm font-medium mb-6 max-w-lg">
+          {errorDetails.message || "Resumix could not complete the analysis because the required service did not return valid verified data."}
+        </p>
+        <div className="flex gap-3">
+          <button 
+            onClick={() => startPipeline()}
+            className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-sm text-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Retry Analysis
+          </button>
+          <button 
+            onClick={() => {
+              setStep("SETUP");
+              setErrorDetails({ title: "", message: "" });
+            }} 
+            className="px-6 py-2.5 bg-white text-slate-700 border border-slate-300 font-bold rounded-xl hover:bg-slate-50 transition-all text-xs flex items-center gap-1.5"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Go Back to Setup
+          </button>
+        </div>
       </div>
     );
   }
 
   if (step === "LOCKED") {
     return (
-      <div className="py-12 flex flex-col items-center justify-center text-center bg-green-50/50 backdrop-blur-xl border border-green-100 rounded-3xl p-8 shadow-sm">
-        <div className="w-20 h-20 bg-green-100 text-green-500 rounded-full flex items-center justify-center mb-6">
+      <div className="py-12 flex flex-col items-center justify-center text-center bg-green-50/70 backdrop-blur-xl border border-green-200 rounded-3xl p-8 shadow-sm">
+        <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-6 border border-green-200">
           <CheckCircle className="w-10 h-10" />
         </div>
-        <h3 className="text-green-800 font-display font-bold text-3xl mb-2">🎉 Resume Ready to Apply</h3>
-        <p className="text-green-700 text-sm font-medium mb-6 max-w-md">
-          Your resume has successfully met all mandatory requirements in the Frozen Profile for {targetRole} at {targetCompany}.
+        <h3 className="text-green-900 font-display font-bold text-3xl mb-2">Resume Meets Target Requirements</h3>
+        <p className="text-green-800 text-sm font-medium mb-6 max-w-md">
+          Your resume has verified evidence for all required skills in the Target Profile for <strong>{targetRole}</strong> at <strong>{targetCompany}</strong>.
         </p>
         
         <div className="flex gap-4 mb-8">
-          <div className="bg-white p-4 rounded-2xl border border-green-100 shadow-sm w-32">
-            <span className="block text-3xl font-display font-bold text-green-600">{gapReport?.scores.atsCompatibility}%</span>
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">ATS Match</span>
+          <div className="bg-white p-4 rounded-2xl border border-green-200 shadow-sm w-36">
+            <span className="block text-3xl font-display font-bold text-green-600">
+              {gapReport?.scores.atsCompatibility !== undefined ? `${gapReport.scores.atsCompatibility}%` : "—"}
+            </span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">ATS Score</span>
           </div>
-          <div className="bg-white p-4 rounded-2xl border border-green-100 shadow-sm w-32">
-            <span className="block text-3xl font-display font-bold text-green-600">100%</span>
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Requirements</span>
+          <div className="bg-white p-4 rounded-2xl border border-green-200 shadow-sm w-36">
+            <span className="block text-3xl font-display font-bold text-green-600">
+              {gapReport?.scores.requiredSkills !== undefined ? `${gapReport.scores.requiredSkills}%` : "—"}
+            </span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Required Skills</span>
           </div>
         </div>
 
-        <p className="text-slate-500 text-xs mb-6">No additional required improvements detected. Optimization Locked.</p>
+        <p className="text-slate-500 text-xs mb-6">No unaddressed critical gaps detected against available specifications.</p>
 
         <div className="flex gap-3">
           <button 
             onClick={() => downloadTextFile(`${targetCompany}_Tailored_Resume.md`, batchResult?.tailoredContent || selectedResume?.content || "")}
-            className="px-6 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-[0_4px_20px_rgba(34,197,94,0.3)]"
+            className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-[0_4px_20px_rgba(34,197,94,0.3)] text-xs"
           >
-            <Download className="w-4 h-4" /> Download Final Resume
+            <Download className="w-4 h-4" /> Download Resume (Markdown)
           </button>
-          <button onClick={() => setStep("SETUP")} className="px-6 py-3 bg-white text-slate-600 border border-slate-200 font-bold rounded-xl hover:bg-slate-50 transition-all">
+          <button onClick={() => setStep("SETUP")} className="px-6 py-3 bg-white text-slate-600 border border-slate-200 font-bold rounded-xl hover:bg-slate-50 transition-all text-xs">
             Start New Target
           </button>
         </div>
@@ -278,32 +366,32 @@ export default function TailorWizard({
     return (
       <div className="space-y-6">
         {/* DASHBOARD HEADER */}
-        <div className="bg-white/45 backdrop-blur-md border border-slate-100 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="bg-white/70 backdrop-blur-md border border-slate-200 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <div className="flex items-center gap-2 mb-2">
               <span className="px-2.5 py-1 bg-cyan-100 text-cyan-700 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-                <Lock className="w-3 h-3" /> Frozen Profile Active
+                <Lock className="w-3 h-3" /> Target Profile Active
               </span>
             </div>
             <h3 className="text-2xl font-display font-bold text-slate-900">
               {targetRole} <span className="text-slate-400">at</span> {targetCompany}
             </h3>
             <p className="text-slate-500 text-xs mt-1">
-              Checklist Engine has identified {gapReport.missingItems?.length || 0} missing items.
+              Verified {gapReport.missingItems?.length || 0} gap(s) against required qualifications.
             </p>
           </div>
           
           <div className="flex flex-col items-end">
-            <span className="text-sm font-bold text-slate-800">Overall Completion</span>
+            <span className="text-xs font-bold text-slate-600">Calculated Completion</span>
             <div className="flex items-center gap-3 mt-1">
               <div className="w-32 bg-slate-200 h-2 rounded-full overflow-hidden">
                 <motion.div 
                   initial={{ width: 0 }} 
-                  animate={{ width: `${gapReport.overallCompletion}%` }} 
+                  animate={{ width: `${gapReport.overallCompletion || 0}%` }} 
                   className="bg-cyan-500 h-full shadow-[0_0_8px_#22d3ee]"
                 />
               </div>
-              <span className="text-lg font-display font-bold text-cyan-600">{gapReport.overallCompletion}%</span>
+              <span className="text-lg font-display font-bold text-cyan-600">{gapReport.overallCompletion || 0}%</span>
             </div>
           </div>
         </div>
@@ -325,16 +413,16 @@ export default function TailorWizard({
                 dashboardTab === "tailored" ? "border-cyan-500 text-cyan-600" : "border-transparent text-slate-500 hover:text-slate-700"
               }`}
             >
-              Tailored Resume
+              Tailored Draft
             </button>
           )}
         </div>
 
         {dashboardTab === "checklist" ? (
           <>
-            {/* CATEGORY SCORECARD */}
+            {/* CATEGORY SCORECARD (Calculated from Real Data) */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <ScoreCard title="ATS Compatibility" score={gapReport.scores.atsCompatibility} />
+              <ScoreCard title="ATS Score" score={gapReport.scores.atsCompatibility} />
               <ScoreCard title="Required Skills" score={gapReport.scores.requiredSkills} />
               <ScoreCard title="Experience Match" score={gapReport.scores.experienceMatch} />
               <ScoreCard title="Formatting" score={gapReport.scores.formatting} />
@@ -344,13 +432,13 @@ export default function TailorWizard({
             <div className="mt-8">
               <h3 className="text-lg font-display font-bold text-slate-800 mb-4 flex items-center gap-2">
                 <CheckSquare className="w-5 h-5 text-cyan-500" />
-                Missing Requirements Checklist
+                Verified Requirements Checklist
               </h3>
               
               {(!gapReport.missingItems || gapReport.missingItems.length === 0) ? (
-                <div className="p-8 bg-green-50 border border-green-100 rounded-2xl text-center">
+                <div className="p-8 bg-green-50 border border-green-200 rounded-2xl text-center">
                   <CheckCircle className="w-8 h-8 text-green-500 mx-auto mb-2" />
-                  <p className="text-green-800 font-bold">All mandatory requirements met!</p>
+                  <p className="text-green-800 font-bold">All mandatory requirements met in the current resume!</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -377,13 +465,14 @@ export default function TailorWizard({
                             {item.importance}
                           </span>
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{item.type}</span>
-                          <span className="ml-auto text-[10px] font-bold text-cyan-600 bg-cyan-50 px-2 py-1 rounded-lg">ATS Impact: {item.atsImpact}</span>
+                          {item.atsImpact && (
+                            <span className="ml-auto text-[10px] font-bold text-cyan-600 bg-cyan-50 px-2 py-1 rounded-lg">Impact: {item.atsImpact}</span>
+                          )}
                         </div>
                         
                         <h4 className="text-base font-bold text-slate-800 mb-1">{item.title}</h4>
                         <p className="text-sm text-slate-600 mb-3">{item.reason}</p>
                         
-                        {/* Single Fix option (Optional secondary fallback, optimized & fast) */}
                         <div className="flex gap-2">
                           {activeMissingItem?.title !== item.title ? (
                             <button 
@@ -413,33 +502,33 @@ export default function TailorWizard({
                             >
                               {isTailoring ? (
                                 <div className="flex items-center gap-3 text-cyan-600 text-sm font-bold">
-                                  <RefreshCw className="w-4 h-4 animate-spin" /> Generating tailored addition...
+                                  <RefreshCw className="w-4 h-4 animate-spin" /> Formulating truthful suggestion...
                                 </div>
                               ) : tailorRecommendation ? (
                                 <div className="space-y-3">
                                   <div className="flex justify-between items-start">
                                     <div>
-                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Where to add it</span>
-                                      <span className="text-sm font-bold text-slate-800 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">{tailorRecommendation.section} Section</span>
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Target Section</span>
+                                      <span className="text-xs font-bold text-slate-800 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">{tailorRecommendation.section}</span>
                                     </div>
                                     <div>
-                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Evidence Status</span>
-                                      <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${tailorRecommendation.evidenceStatus.includes('Already') ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Status</span>
+                                      <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-amber-100 text-amber-800">
                                         {tailorRecommendation.evidenceStatus}
                                       </span>
                                     </div>
                                   </div>
                                   
                                   <div>
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Suggested Bullet / Sentence</span>
-                                    <div className="bg-white border border-cyan-200 p-3 rounded-lg text-sm text-slate-700 italic border-l-4 border-l-cyan-500">
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Suggested Phrasing / Project Idea</span>
+                                    <div className="bg-white border border-cyan-200 p-3 rounded-lg text-xs text-slate-700 italic border-l-4 border-l-cyan-500">
                                       "{tailorRecommendation.suggestedSentence}"
                                     </div>
                                   </div>
                                   
                                   <div className="pt-2 flex gap-3">
                                     <button onClick={() => handleMarkResolved(item)} className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
-                                      <Check className="w-3.5 h-3.5" /> Apply & Re-Validate
+                                      <Check className="w-3.5 h-3.5" /> Mark Resolved & Re-Validate
                                     </button>
                                   </div>
                                 </div>
@@ -449,12 +538,6 @@ export default function TailorWizard({
                         </AnimatePresence>
 
                       </div>
-                      
-                      <div className="flex flex-col items-center justify-center border-l border-slate-100 pl-4 md:w-32">
-                        <span className="block text-xl font-display font-bold text-slate-800">{item.confidenceScore}%</span>
-                        <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Confidence</span>
-                      </div>
-
                     </div>
                   ))}
                 </div>
@@ -469,8 +552,8 @@ export default function TailorWizard({
                 className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-xl flex items-center gap-6 z-50 border border-slate-700"
               >
                 <div className="text-xs">
-                  <span className="font-bold block">{selectedItems.length} Gaps Selected</span>
-                  <span className="text-slate-400">Ready to build fully tailored resume</span>
+                  <span className="font-bold block">{selectedItems.length} Item(s) Selected</span>
+                  <span className="text-slate-400">Optimize resume to address selected items</span>
                 </div>
                 <button 
                   onClick={handleBatchTailor}
@@ -480,12 +563,12 @@ export default function TailorWizard({
                   {isBatchTailoring ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Generating...</span>
+                      <span>Optimizing...</span>
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-3.5 h-3.5" />
-                      <span>Generate Tailored Resume</span>
+                      <span>Generate Optimized Resume</span>
                     </>
                   )}
                 </button>
@@ -495,8 +578,8 @@ export default function TailorWizard({
         ) : (
           /* BATCH TAILORED RESULT VIEW */
           <div className="space-y-6">
-            <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-100">
-              <span className="text-sm font-bold text-slate-800">Batch Tailored Content</span>
+            <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200">
+              <span className="text-sm font-bold text-slate-800">Optimized Resume Draft</span>
               <div className="flex gap-2">
                 <button 
                   onClick={() => copyToClipboard(batchResult?.tailoredContent || "")}
@@ -510,28 +593,28 @@ export default function TailorWizard({
                   className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition-all"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Download</span>
+                  <span>Download (.md)</span>
                 </button>
               </div>
             </div>
 
-            {/* EXPLANATIONS (Explain Every Change - Phase 14) */}
+            {/* EXPLANATIONS */}
             {batchResult?.explanations && batchResult.explanations.length > 0 && (
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
                 <h4 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
                   <TrendingUp className="w-4 h-4 text-cyan-500" />
-                  Tailoring Insights & Changes Explained
+                  Tailoring Changes Explained
                 </h4>
                 <div className="grid md:grid-cols-2 gap-4">
                   {batchResult.explanations.map((exp, idx) => (
-                    <div key={idx} className="bg-white p-4 rounded-xl border border-slate-100 flex flex-col justify-between">
+                    <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col justify-between">
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">{exp.whatChanged}</span>
                         <p className="text-xs text-slate-600 leading-relaxed font-medium mb-3">{exp.why}</p>
                       </div>
-                      <div className="flex justify-between items-center border-t border-slate-50 pt-2 text-[10px] font-bold">
+                      <div className="flex justify-between items-center border-t border-slate-100 pt-2 text-[10px] font-bold">
                         <span className="text-green-600">ATS Benefit: {exp.atsBenefit}</span>
-                        <span className="text-slate-400">Confidence: {exp.confidence}%</span>
+                        <span className="text-slate-400">Recruiter: {exp.recruiterBenefit}</span>
                       </div>
                     </div>
                   ))}
@@ -539,20 +622,30 @@ export default function TailorWizard({
               </div>
             )}
 
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-inner font-mono text-xs overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed text-slate-700">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 font-mono text-xs overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed text-slate-700">
               {batchResult?.tailoredContent}
             </div>
 
             <div className="flex justify-end gap-3 pt-4">
               <button 
                 onClick={async () => {
-                  // Run gap analysis on newly tailored content
                   setStep("PROCESSING");
-                  setLoadingMessage("Validating fully tailored resume...");
-                  const parsedData = { ...parsedResume, skills: [...(parsedResume?.skills || []), ...selectedItems.map(i => i.title)] } as ParsedResume;
-                  await runGapAnalysis(parsedData, frozenProfile!);
+                  setLoadingMessage("Validating tailored resume against requirements...");
+                  const parsedData = { 
+                    ...parsedResume, 
+                    skills: [...(parsedResume?.skills || []), ...selectedItems.map(i => i.title)] 
+                  } as ParsedResume;
+                  try {
+                    await runGapAnalysis(parsedData, frozenProfile!);
+                  } catch (err: any) {
+                    setErrorDetails({
+                      title: "Re-validation Error",
+                      message: err.message || "Failed to validate tailored resume."
+                    });
+                    setStep("ERROR");
+                  }
                 }}
-                className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl flex items-center gap-2 transition-all"
+                className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all"
               >
                 <CheckCircle className="w-4 h-4" /> Save & Re-Validate Match Score
               </button>
@@ -573,27 +666,20 @@ export default function TailorWizard({
         </div>
         <div>
           <h2 className="text-slate-800 font-display font-bold text-lg">
-            Requirement Engine
+            Requirement & Gap Engine
           </h2>
           <p className="text-slate-500 text-xs">
-            Generate a deterministic checklist and freeze requirements
+            Analyze target role requirements truthfully against your resume
           </p>
         </div>
       </div>
 
-      {error && (
-        <div className="p-4 bg-red-50/70 backdrop-blur-md border border-red-200 rounded-2xl text-red-700 text-sm flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      <form onSubmit={startPipeline} className="space-y-5 bg-white/45 backdrop-blur-md p-6 border border-slate-100/80 rounded-3xl shadow-sm">
+      <form onSubmit={startPipeline} className="space-y-5 bg-white/70 backdrop-blur-md p-6 border border-slate-200 rounded-3xl shadow-sm">
         <div className="grid md:grid-cols-2 gap-5">
           <div>
             <label className="block text-slate-700 text-xs font-bold mb-2 uppercase tracking-wider">Target Company Name *</label>
             <input
-              type="text" required placeholder="e.g. Google, Deloitte"
+              type="text" required placeholder="e.g. Google, Deloitte, Shopify"
               value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)}
               className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm focus:outline-none focus:border-cyan-400 transition-all font-medium"
             />
@@ -601,7 +687,7 @@ export default function TailorWizard({
           <div>
             <label className="block text-slate-700 text-xs font-bold mb-2 uppercase tracking-wider">Target Job Role *</label>
             <input
-              type="text" required placeholder="e.g. Frontend Developer"
+              type="text" required placeholder="e.g. Rust Developer, Django Backend Engineer, Frontend Specialist"
               value={targetRole} onChange={(e) => setTargetRole(e.target.value)}
               className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm focus:outline-none focus:border-cyan-400 transition-all font-medium"
             />
@@ -615,7 +701,7 @@ export default function TailorWizard({
               value={experienceLevel} onChange={(e) => setExperienceLevel(e.target.value)}
               className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm focus:outline-none focus:border-cyan-400 transition-all font-medium appearance-none"
             >
-              <option value="Fresher">Fresher</option>
+              <option value="Fresher / Graduate">Fresher / Graduate</option>
               <option value="1–2 years">1–2 years</option>
               <option value="3–5 years">3–5 years</option>
               <option value="5+ years">5+ years</option>
@@ -624,23 +710,27 @@ export default function TailorWizard({
         </div>
 
         <div>
-          <label className="block text-slate-700 text-xs font-bold mb-2 uppercase tracking-wider">Job Description (Highest Priority)</label>
+          <label className="block text-slate-700 text-xs font-bold mb-2 uppercase tracking-wider">
+            Job Description (Highest Priority Source of Truth)
+          </label>
           <textarea
-            rows={4} placeholder="Paste job description to generate highly accurate requirements..."
-            value={jobDescription} onChange={(e) => setJobDescription(e.target.value)}
+            rows={4} 
+            placeholder="Paste actual Job Description here to extract exact required skills and standards..."
+            value={jobDescription} 
+            onChange={(e) => setJobDescription(e.target.value)}
             className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm focus:outline-none focus:border-cyan-400 transition-all resize-none font-medium"
           />
         </div>
 
         <div className="pt-2 flex flex-col sm:flex-row justify-between items-center gap-4">
           <div className="text-slate-500 text-xs flex items-center gap-2">
-            Using Resume: {selectedResume ? <strong className="text-slate-800">{selectedResume.name}</strong> : <span className="text-red-500">None selected</span>}
+            Using Resume: {selectedResume ? <strong className="text-slate-800">{selectedResume.name}</strong> : <span className="text-red-500 font-semibold">None selected</span>}
           </div>
           <button
             type="submit" disabled={!selectedResume}
-            className="px-8 py-3 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white text-sm font-bold rounded-xl flex items-center gap-2 shadow-[0_4px_20px_rgba(6,182,212,0.3)] transition-all"
+            className="px-8 py-3 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 text-white text-xs font-bold rounded-xl flex items-center gap-2 shadow-[0_4px_20px_rgba(6,182,212,0.3)] transition-all clickable-cursor"
           >
-            <Cpu className="w-4 h-4" /> Start Deterministic Engine
+            <Cpu className="w-4 h-4" /> Start Deterministic Analysis
           </button>
         </div>
       </form>
@@ -651,10 +741,9 @@ export default function TailorWizard({
 // -----------------------------
 // ScoreCard Helper Component
 // -----------------------------
-function ScoreCard({ title, score }: { title: string, score: number }) {
-  const isHigh = score >= 85;
-  const isMedium = score >= 60 && score < 85;
-  const isLow = score < 60;
+function ScoreCard({ title, score }: { title: string; score: number }) {
+  const isHigh = score >= 80;
+  const isMedium = score >= 50 && score < 80;
   
   const colorClass = isHigh ? "text-green-600 bg-green-50" : isMedium ? "text-amber-600 bg-amber-50" : "text-red-600 bg-red-50";
   const barClass = isHigh ? "bg-green-500" : isMedium ? "bg-amber-500" : "bg-red-500";
@@ -662,11 +751,17 @@ function ScoreCard({ title, score }: { title: string, score: number }) {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
       <div className="flex justify-between items-start mb-4">
-        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider w-20 leading-tight">{title}</span>
-        <span className={`px-2 py-1 rounded-lg text-sm font-display font-bold ${colorClass}`}>{score}%</span>
+        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider leading-tight">{title}</span>
+        <span className={`px-2 py-1 rounded-lg text-xs font-display font-bold ${colorClass}`}>
+          {typeof score === "number" && !isNaN(score) ? `${score}%` : "—"}
+        </span>
       </div>
       <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-        <motion.div initial={{ width: 0 }} animate={{ width: `${score}%` }} className={`h-full ${barClass}`} />
+        <motion.div 
+          initial={{ width: 0 }} 
+          animate={{ width: `${Math.min(100, Math.max(0, score || 0))}%` }} 
+          className={`h-full ${barClass}`} 
+        />
       </div>
     </div>
   );
