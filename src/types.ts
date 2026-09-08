@@ -139,7 +139,85 @@ export interface ResumeAnalysis {
   atsKeywords?: string[];
 }
 
-// V2 Deterministic Types
+export type RequirementCategory =
+  | "TECHNICAL_SKILL"
+  | "SOFT_SKILL"
+  | "TOOL"
+  | "FRAMEWORK"
+  | "LANGUAGE"
+  | "DATABASE"
+  | "CLOUD"
+  | "CERTIFICATION"
+  | "EDUCATION"
+  | "EXPERIENCE"
+  | "RESPONSIBILITY"
+  | "DOMAIN_KNOWLEDGE"
+  | "KEYWORD"
+  | "OTHER";
+
+export type RequirementImportance = "REQUIRED" | "PREFERRED" | "OPTIONAL";
+
+export type RequirementSource =
+  | "JOB_DESCRIPTION"
+  | "COMPANY_VERIFIED"
+  | "TARGET_ROLE"
+  | "ROLE_LEVEL"
+  | "AI_INFERENCE";
+
+export type RequirementStatus =
+  | "PRESENT"
+  | "PARTIAL"
+  | "MISSING"
+  | "UNVERIFIED"
+  | "NOT_APPLICABLE";
+
+export type RequirementPriority = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+
+export interface TargetRequirement {
+  requirementId: string;
+  name: string;
+  canonicalName: string;
+  category: RequirementCategory;
+  importance: RequirementImportance;
+  source: RequirementSource;
+  sourceQuote?: string;
+  status: RequirementStatus;
+  priority: RequirementPriority;
+  confidence: number;
+  evidenceQuote?: string;
+  reason?: string;
+}
+
+export interface ScoreBreakdown {
+  requiredMatched: number;
+  requiredTotal: number;
+  requiredPercentage: number;
+  preferredMatched: number;
+  preferredTotal: number;
+  preferredPercentage: number;
+  keywordsMatched: number;
+  keywordsTotal: number;
+  keywordPercentage: number;
+  experienceMatchScore: number;
+  educationMatchScore: number;
+  criticalGapsCount: number;
+}
+
+export interface CategorizedGaps {
+  criticalGaps: MissingItem[];
+  requiredGaps: MissingItem[];
+  preferredGaps: MissingItem[];
+  optionalImprovements: MissingItem[];
+  matchedRequirements: TargetRequirement[];
+  unverifiedRequirements: TargetRequirement[];
+}
+
+export type CompletionState =
+  | "ANALYSIS_PENDING"
+  | "CRITICAL_GAPS_REMAIN"
+  | "READY_TO_APPLY";
+
+// V2 & V3 Deterministic Types
 
 export interface RequirementProfile {
   id: string;
@@ -150,7 +228,12 @@ export interface RequirementProfile {
   experienceLevel: string;
   createdAt: string;
   
-  // Frozen requirements
+  // Stage 3 Frozen Profile metadata & structured requirements
+  profileHash?: string;
+  isFrozen?: boolean;
+  structuredRequirements?: TargetRequirement[];
+
+  // Legacy & Categorized String arrays for UI compatibility
   requiredSkills: string[];
   preferredSkills: string[];
   softSkills: string[];
@@ -187,6 +270,13 @@ export interface GapReport {
   
   missingItems: MissingItem[];
   
+  // Stage 3 Explainable breakdowns & structured gaps
+  atsScore?: number;
+  targetMatchScore?: number;
+  scoreBreakdown?: ScoreBreakdown;
+  categorizedGaps?: CategorizedGaps;
+  completionState?: CompletionState;
+
   // ATS Analysis
   atsPresent: string[];
   atsMissing: string[];
@@ -220,3 +310,4 @@ export interface TailorRecommendation {
   atsImpact: string;
   confidence: number;
 }
+

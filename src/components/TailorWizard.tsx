@@ -150,7 +150,11 @@ export default function TailorWizard({
     const gapRes = await fetch("/api/gap-analysis", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parsedResume: parsed, frozenProfile: profile })
+      body: JSON.stringify({
+        parsedResume: parsed,
+        frozenProfile: profile,
+        rawResumeText: selectedResume?.content || ""
+      })
     });
 
     const gapJson = await gapRes.json();
@@ -168,6 +172,9 @@ export default function TailorWizard({
         id: gapReportId,
         userId,
         resumeId: selectedResume?.id,
+        targetCompany,
+        targetRole,
+        requirementProfileId: profile.id || profile.profileHash,
         createdAt: new Date().toISOString()
       });
     } catch (saveErr) {
@@ -446,11 +453,39 @@ export default function TailorWizard({
           <>
             {/* CATEGORY SCORECARD (Calculated from Real Data) */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <ScoreCard title="ATS Score" score={gapReport.scores.atsCompatibility} />
-              <ScoreCard title="Required Skills" score={gapReport.scores.requiredSkills} />
-              <ScoreCard title="Experience Match" score={gapReport.scores.experienceMatch} />
-              <ScoreCard title="Formatting" score={gapReport.scores.formatting} />
+              <ScoreCard title="ATS Compatibility" score={gapReport.atsScore ?? gapReport.scores.atsCompatibility} />
+              <ScoreCard title="Target Match" score={gapReport.targetMatchScore ?? gapReport.scores.companyMatch} />
+              <ScoreCard title="Required Skills" score={gapReport.scoreBreakdown?.requiredPercentage ?? gapReport.scores.requiredSkills} />
+              <ScoreCard title="Experience Match" score={gapReport.scoreBreakdown?.experienceMatchScore ?? gapReport.scores.experienceMatch} />
             </div>
+
+            {/* SCORE BREAKDOWN STRIP */}
+            {gapReport.scoreBreakdown && (
+              <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-4 flex-wrap">
+                  <span className="text-slate-600 font-medium">
+                    Required: <strong className="text-slate-900">{gapReport.scoreBreakdown.requiredMatched} / {gapReport.scoreBreakdown.requiredTotal}</strong>
+                  </span>
+                  <span className="text-slate-400">•</span>
+                  <span className="text-slate-600 font-medium">
+                    Preferred: <strong className="text-slate-900">{gapReport.scoreBreakdown.preferredMatched} / {gapReport.scoreBreakdown.preferredTotal}</strong>
+                  </span>
+                  <span className="text-slate-400">•</span>
+                  <span className="text-slate-600 font-medium">
+                    Keywords: <strong className="text-slate-900">{gapReport.scoreBreakdown.keywordsMatched} / {gapReport.scoreBreakdown.keywordsTotal}</strong>
+                  </span>
+                </div>
+                <div>
+                  <span className={`px-2.5 py-1 rounded-full font-bold text-[10px] uppercase tracking-wider ${
+                    gapReport.scoreBreakdown.criticalGapsCount === 0 
+                      ? "bg-green-100 text-green-700" 
+                      : "bg-red-100 text-red-700"
+                  }`}>
+                    {gapReport.scoreBreakdown.criticalGapsCount === 0 ? "Ready to Apply" : `${gapReport.scoreBreakdown.criticalGapsCount} Critical Gap(s)`}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* MISSING REQUIREMENT CARDS */}
             <div className="mt-8">

@@ -2,6 +2,17 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
+import {
+  computeProfileHash,
+  generateRequirementId,
+  deduplicateRequirements,
+  normalizeTechnologyName,
+  TargetRequirement
+} from "./src/lib/requirementEngine";
+import {
+  evaluateResumeAgainstRequirements,
+  EvaluationResult
+} from "./src/lib/atsEngine";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -482,7 +493,7 @@ CRITICAL ANTI-FABRICATION AND DATA INTEGRITY RULES:
   }
 });
 
-// V2 Deterministic Pipeline - Phase 1: Requirement Engine
+// V2 & V3 Deterministic Pipeline - Phase 1: Requirement Engine
 app.post("/api/generate-requirement-profile", async (req, res) => {
   try {
     const { targetCompany, targetRole, jobDescription, experienceLevel } = req.body;
@@ -562,6 +573,52 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
     if (!validateRequirementProfile(result)) {
       return sendError(res, "INVALID_AI_OUTPUT", "Generated requirement profile failed validation.", 502);
     }
+
+    // Stage 3: Deterministic Profile Hashing & Structured Model Building
+    const profileHash = computeProfileHash(targetCompany, targetRole, experienceLevel || "", jobDescription);
+    result.profileHash = profileHash;
+    result.isFrozen = true;
+
+    const structuredReqs: TargetRequirement[] = [];
+
+    // Helper to build structured requirements
+    const addCategoryReqs = (
+      names: string[],
+      category: TargetRequirement["category"],
+      importance: TargetRequirement["importance"]
+    ) => {
+      for (const raw of names) {
+        if (!raw || typeof raw !== "string" || !raw.trim()) continue;
+        const canonical = normalizeTechnologyName(raw);
+        const reqId = generateRequirementId(profileHash, canonical, category);
+        const source = jobDescription && jobDescription.toLowerCase().includes(raw.toLowerCase())
+          ? "JOB_DESCRIPTION"
+          : "TARGET_ROLE";
+
+        structuredReqs.push({
+          requirementId: reqId,
+          name: raw.trim(),
+          canonicalName: canonical,
+          category,
+          importance,
+          source,
+          status: "MISSING",
+          priority: importance === "REQUIRED" ? "CRITICAL" : importance === "PREFERRED" ? "HIGH" : "MEDIUM",
+          confidence: 100,
+          sourceQuote: source === "JOB_DESCRIPTION" ? `Extracted directly from Job Description: "${raw.trim()}"` : undefined
+        });
+      }
+    };
+
+    addCategoryReqs(result.requiredSkills || [], "TECHNICAL_SKILL", "REQUIRED");
+    addCategoryReqs(result.technologies || [], "FRAMEWORK", "REQUIRED");
+    addCategoryReqs(result.preferredSkills || [], "TECHNICAL_SKILL", "PREFERRED");
+    addCategoryReqs(result.tools || [], "TOOL", "PREFERRED");
+    addCategoryReqs(result.atsKeywords || [], "KEYWORD", "PREFERRED");
+    addCategoryReqs(result.softSkills || [], "SOFT_SKILL", "OPTIONAL");
+    addCategoryReqs(result.certifications || [], "CERTIFICATION", "PREFERRED");
+
+    result.structuredRequirements = deduplicateRequirements(structuredReqs);
 
     return sendSuccess(res, result);
   } catch (error: any) {
@@ -729,117 +786,95 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
   }
 });
 
-// V2 Deterministic Pipeline - Phase 3 & 4: Gap Analysis
+// V2 & V3 Deterministic Pipeline - Phase 3 & 4: Deterministic Gap Analysis & ATS Engine
 app.post("/api/gap-analysis", async (req, res) => {
   try {
-    const { parsedResume, frozenProfile } = req.body;
+    const { parsedResume, frozenProfile, rawResumeText } = req.body;
     if (!parsedResume || !frozenProfile) {
       return sendError(res, "MISSING_REQUIRED_DATA", "Missing parsedResume or frozenProfile in request.", 400);
     }
 
-    const ai = getAI();
-    const systemPrompt = `You are a strict, objective ATS Gap Analysis Engine.
+    // 1. Resolve structured requirements from frozen profile
+    let structuredRequirements: TargetRequirement[] = [];
+    if (Array.isArray(frozenProfile.structuredRequirements) && frozenProfile.structuredRequirements.length > 0) {
+      structuredRequirements = frozenProfile.structuredRequirements;
+    } else {
+      // Reconstruct structured requirements deterministically from frozen profile fields
+      const profileHash = frozenProfile.profileHash || computeProfileHash(
+        frozenProfile.targetCompany || "",
+        frozenProfile.targetRole || "",
+        frozenProfile.experienceLevel || "",
+        frozenProfile.jobDescription
+      );
 
-TASK:
-Compare the Parsed Resume against the Frozen Requirement Profile.
+      const addCategoryReqs = (
+        names: string[],
+        category: TargetRequirement["category"],
+        importance: TargetRequirement["importance"]
+      ) => {
+        for (const raw of names) {
+          if (!raw || typeof raw !== "string" || !raw.trim()) continue;
+          const canonical = normalizeTechnologyName(raw);
+          const reqId = generateRequirementId(profileHash, canonical, category);
+          const source = frozenProfile.jobDescription && frozenProfile.jobDescription.toLowerCase().includes(raw.toLowerCase())
+            ? "JOB_DESCRIPTION"
+            : "TARGET_ROLE";
 
-CRITICAL RULES:
-1. SEPARATE TARGET REQUIREMENTS FROM USER QUALIFICATIONS:
-   - A skill or technology is ONLY present if there is explicit evidence in the Parsed Resume.
-   - If the Target Profile requires Rust, Django, or Docker, and the Resume does NOT mention it, it MUST be marked as a missing item in "missingItems" and "atsMissing".
-   - NEVER claim the candidate has a skill simply because the job requires it.
-2. NO INVENTED GAPS: Missing items must be based purely on the Frozen Requirement Profile.
-3. REALISTIC SCORECARD:
-   - Calculate genuine integer scores (0 to 100) based on actual percentage of matching requirements.
-   - If the resume matches 20% of required skills, score requiredSkills around 20. Do NOT give unearned 90+ scores.
-   - Set overallCompletion accurately.
-   - isReadyToApply is true ONLY if all critical requirements are met and overallCompletion >= 90.`;
+          structuredRequirements.push({
+            requirementId: reqId,
+            name: raw.trim(),
+            canonicalName: canonical,
+            category,
+            importance,
+            source,
+            status: "MISSING",
+            priority: importance === "REQUIRED" ? "CRITICAL" : importance === "PREFERRED" ? "HIGH" : "MEDIUM",
+            confidence: 100
+          });
+        }
+      };
 
-    const schema = {
-      type: Type.OBJECT,
-      properties: {
-        missingItems: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING, description: "Skill, ATS Keyword, Project, Achievement, Responsibility, Certification, Technology, Grammar, Formatting, or Experience" },
-              title: { type: Type.STRING },
-              importance: { type: Type.STRING, description: "Critical, Recommended, or Optional" },
-              reason: { type: Type.STRING },
-              suggestedAddition: { type: Type.STRING, description: "Honest recommendation or project idea to acquire this skill" },
-              atsImpact: { type: Type.STRING },
-              recruiterImpact: { type: Type.STRING, description: "High, Medium, or Low" },
-              confidenceScore: { type: Type.INTEGER, description: "Calculated match confidence integer (0-100)" }
-            },
-            required: ["type", "title", "importance", "reason", "suggestedAddition", "atsImpact", "recruiterImpact", "confidenceScore"]
-          }
-        },
-        atsPresent: { type: Type.ARRAY, items: { type: Type.STRING } },
-        atsMissing: { type: Type.ARRAY, items: { type: Type.STRING } },
-        atsWeak: { type: Type.ARRAY, items: { type: Type.STRING } },
-        atsOverused: { type: Type.ARRAY, items: { type: Type.STRING } },
-        scores: {
-          type: Type.OBJECT,
-          properties: {
-            atsCompatibility: { type: Type.INTEGER },
-            requiredSkills: { type: Type.INTEGER },
-            preferredSkills: { type: Type.INTEGER },
-            experienceMatch: { type: Type.INTEGER },
-            projects: { type: Type.INTEGER },
-            achievements: { type: Type.INTEGER },
-            grammar: { type: Type.INTEGER },
-            formatting: { type: Type.INTEGER },
-            companyMatch: { type: Type.INTEGER },
-            softSkills: { type: Type.INTEGER },
-            leadership: { type: Type.INTEGER }
-          },
-          required: [
-            "atsCompatibility",
-            "requiredSkills",
-            "preferredSkills",
-            "experienceMatch",
-            "projects",
-            "achievements",
-            "grammar",
-            "formatting",
-            "companyMatch",
-            "softSkills",
-            "leadership"
-          ]
-        },
-        overallCompletion: { type: Type.INTEGER },
-        isReadyToApply: { type: Type.BOOLEAN }
-      },
-      required: [
-        "missingItems",
-        "atsPresent",
-        "atsMissing",
-        "atsWeak",
-        "atsOverused",
-        "scores",
-        "overallCompletion",
-        "isReadyToApply"
-      ]
-    };
+      addCategoryReqs(frozenProfile.requiredSkills || [], "TECHNICAL_SKILL", "REQUIRED");
+      addCategoryReqs(frozenProfile.technologies || [], "FRAMEWORK", "REQUIRED");
+      addCategoryReqs(frozenProfile.preferredSkills || [], "TECHNICAL_SKILL", "PREFERRED");
+      addCategoryReqs(frozenProfile.tools || [], "TOOL", "PREFERRED");
+      addCategoryReqs(frozenProfile.atsKeywords || [], "KEYWORD", "PREFERRED");
+      addCategoryReqs(frozenProfile.softSkills || [], "SOFT_SKILL", "OPTIONAL");
+      addCategoryReqs(frozenProfile.certifications || [], "CERTIFICATION", "PREFERRED");
 
-    const prompt = `Parsed Resume:\n${JSON.stringify(parsedResume)}\n\nFrozen Requirement Profile:\n${JSON.stringify(frozenProfile)}`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }],
-      config: { responseMimeType: "application/json", responseSchema: schema }
-    });
-
-    const responseText = response.text;
-    if (!responseText) {
-      return sendError(res, "EMPTY_AI_RESPONSE", "Empty response from gap analysis engine.", 502);
+      structuredRequirements = deduplicateRequirements(structuredRequirements);
     }
 
-    const result = JSON.parse(responseText);
+    // 2. Perform 100% Deterministic Evidence Matching & ATS Scoring
+    const evaluation = evaluateResumeAgainstRequirements(
+      parsedResume,
+      structuredRequirements,
+      rawResumeText || ""
+    );
+
+    const result = {
+      id: `gap_${frozenProfile.profileHash || frozenProfile.id || Date.now()}`,
+      userId: frozenProfile.userId || "user_current",
+      resumeId: parsedResume.id || "res_current",
+      requirementProfileId: frozenProfile.id || frozenProfile.profileHash || "prof_current",
+      createdAt: new Date().toISOString(),
+      missingItems: evaluation.missingItems,
+      atsPresent: evaluation.categorizedGaps.matchedRequirements.map(r => r.name),
+      atsMissing: evaluation.categorizedGaps.criticalGaps.map(g => g.title),
+      atsWeak: evaluation.categorizedGaps.preferredGaps.map(g => g.title),
+      atsOverused: [],
+      scores: evaluation.categoryScores,
+      atsScore: evaluation.atsScore,
+      targetMatchScore: evaluation.targetMatchScore,
+      scoreBreakdown: evaluation.scoreBreakdown,
+      categorizedGaps: evaluation.categorizedGaps,
+      completionState: evaluation.completionState,
+      overallCompletion: evaluation.targetMatchScore,
+      isReadyToApply: evaluation.isReadyToApply
+    };
 
     if (!validateGapAnalysis(result)) {
-      return sendError(res, "INVALID_AI_OUTPUT", "Gap analysis result failed validation checks.", 502);
+      return sendError(res, "INVALID_OUTPUT_STRUCTURE", "Gap analysis result failed validation checks.", 502);
     }
 
     return sendSuccess(res, result);
