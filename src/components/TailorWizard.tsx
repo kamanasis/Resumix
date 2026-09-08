@@ -235,21 +235,22 @@ export default function TailorWizard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           resumeText: selectedResume?.content,
+          parsedResume,
           frozenProfile,
           selectedItems
         })
       });
       const data = await res.json();
       if (!res.ok || !data.success || !data.data) {
-        throw new Error(data.error?.message || "Failed to perform batch tailoring.");
+        throw new Error(data.error?.message || "Failed to perform factual resume optimization.");
       }
       setBatchResult(data.data);
       setDashboardTab("tailored");
     } catch (err: any) {
       console.error("Batch tailor error:", err);
       setErrorDetails({
-        title: "Batch Tailoring Error",
-        message: err.message || "Failed to generate tailored resume."
+        title: "Tailoring Validation Error",
+        message: err.message || "Failed to generate tailored resume without factual violations."
       });
       setStep("ERROR");
     } finally {
@@ -637,8 +638,46 @@ export default function TailorWizard({
         ) : (
           /* BATCH TAILORED RESULT VIEW */
           <div className="space-y-6">
+            {/* FINALITY BADGE & METRIC BAR */}
+            <div className="bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-transparent p-5 rounded-3xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3 text-emerald-600" /> Final Tailored Resume
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Verified Truth Preservation
+                  </span>
+                </div>
+                <h4 className="text-base font-bold text-slate-900">
+                  Target-Optimized Draft for {targetRole} at {targetCompany}
+                </h4>
+                <p className="text-xs text-slate-600">
+                  100% evidence-based improvements without fabricated metrics, companies, or unpossessed skills.
+                </p>
+              </div>
+
+              {/* BEFORE VS AFTER SCORE COMPARISON */}
+              {batchResult && (batchResult as any).scoreComparison && (
+                <div className="flex items-center gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="text-center px-3 border-r border-slate-100">
+                    <span className="text-[9px] uppercase font-bold text-slate-400 block">ATS Score</span>
+                    <span className="text-sm font-bold text-slate-800">
+                      {(batchResult as any).scoreComparison.beforeAtsScore}% → <strong className="text-emerald-600">{(batchResult as any).scoreComparison.afterAtsScore}%</strong>
+                    </span>
+                  </div>
+                  <div className="text-center px-3">
+                    <span className="text-[9px] uppercase font-bold text-slate-400 block">Target Match</span>
+                    <span className="text-sm font-bold text-slate-800">
+                      {(batchResult as any).scoreComparison.beforeTargetMatch}% → <strong className="text-cyan-600">{(batchResult as any).scoreComparison.afterTargetMatch}%</strong>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200">
-              <span className="text-sm font-bold text-slate-800">Optimized Resume Draft</span>
+              <span className="text-sm font-bold text-slate-800">Optimized Resume Draft (Markdown)</span>
               <div className="flex gap-2">
                 <button 
                   onClick={() => copyToClipboard(batchResult?.tailoredContent || "")}
@@ -649,7 +688,7 @@ export default function TailorWizard({
                 </button>
                 <button 
                   onClick={() => downloadTextFile(`${targetCompany}_Tailored_Resume.md`, batchResult?.tailoredContent || "")}
-                  className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition-all"
+                  className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition-all shadow-sm"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download (.md)</span>

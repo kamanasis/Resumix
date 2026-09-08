@@ -311,3 +311,57 @@ export interface TailorRecommendation {
   confidence: number;
 }
 
+// Stage 4 Types: Evidence-Based Tailoring & Provenance
+export type ChangeType =
+  | "REPHRASE"
+  | "REORDER"
+  | "CONDENSE"
+  | "KEYWORD_ALIGNMENT"
+  | "SECTION_RESTRUCTURE"
+  | "CLARIFICATION"
+  | "USER_APPROVED_ADDITION"
+  | "UNSUPPORTED_CHANGE";
+
+export interface ProvenanceChange {
+  id: string;
+  section: string;
+  originalText: string;
+  generatedText: string;
+  reason: string;
+  relatedRequirementId?: string;
+  evidenceQuote?: string;
+  changeType: ChangeType;
+}
+
+export interface ScoreComparison {
+  beforeAtsScore: number;
+  afterAtsScore: number;
+  atsScoreDelta: number;
+  beforeTargetMatch: number;
+  afterTargetMatch: number;
+  targetMatchDelta: number;
+  beforeCriticalGaps: number;
+  afterCriticalGaps: number;
+  beforeMatchedCount: number;
+  afterMatchedCount: number;
+}
+
+export type FinalityStatus = "OPTIMIZING" | "FINAL_OPTIMIZED" | "VALIDATION_FAILED";
+
+export interface TailoredResumeVersion {
+  versionId: string;
+  parentVersionId?: string;
+  resumeId: string;
+  requirementProfileId: string;
+  profileHash: string;
+  createdAt: string;
+  tailoredContent: string;
+  changes: ProvenanceChange[];
+  scoreComparison: ScoreComparison;
+  isValid: boolean;
+  isFinalVersion: boolean;
+  finalityStatus: FinalityStatus;
+  validationErrors?: string[];
+}
+
+

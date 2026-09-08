@@ -13,6 +13,15 @@ import {
   evaluateResumeAgainstRequirements,
   EvaluationResult
 } from "./src/lib/atsEngine";
+import {
+  validateTailoredResume,
+  ValidationResult
+} from "./src/lib/tailoringValidator";
+import {
+  compareScores,
+  evaluateFinality
+} from "./src/lib/tailoringEngine";
+import { ParsedResume } from "./src/types";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -945,10 +954,10 @@ CRITICAL RULES:
   }
 });
 
-// V2 Deterministic Pipeline - Phase 5 & 14: Batch Tailoring & Explanation Engine
+// V2, V3 & V4 Deterministic Pipeline - Phase 5 & 14: Evidence-Based Tailoring Engine
 app.post("/api/tailor-resume-batch", async (req, res) => {
   try {
-    const { resumeText, frozenProfile, selectedItems } = req.body;
+    const { resumeText, parsedResume, frozenProfile, selectedItems, userApprovedAdditions } = req.body;
     if (!resumeText || !frozenProfile || !selectedItems) {
       return sendError(res, "MISSING_REQUIRED_DATA", "Missing resumeText, frozenProfile, or selectedItems.", 400);
     }
@@ -957,22 +966,62 @@ app.post("/api/tailor-resume-batch", async (req, res) => {
       return sendError(res, "INVALID_SELECTED_ITEMS", "selectedItems must be a non-empty array.", 400);
     }
 
+    // 1. Prepare structured requirements from frozen profile
+    const structuredReqs: TargetRequirement[] = frozenProfile.structuredRequirements || [];
+
+    // 2. Compute Before-Tailoring Stage 3 Evaluation
+    const beforeParsed: ParsedResume = parsedResume || {
+      skills: [],
+      experience: [],
+      education: [],
+      projects: [],
+      achievements: [],
+      certifications: [],
+      languages: [],
+      tools: [],
+      frameworks: [],
+      softSkills: [],
+      atsKeywords: [],
+      responsibilities: [],
+      quantifiedMetrics: [],
+      summary: ""
+    };
+    const beforeEval = evaluateResumeAgainstRequirements(beforeParsed, structuredReqs, resumeText);
+
     const ai = getAI();
-    const systemPrompt = `You are a strict, truthful Resume Optimization Engine.
+    const systemPrompt = `You are a strict, truthful Resume Optimization & Bullet Refinement Engine.
 
 TASK:
-Optimize the current resume by addressing ONLY the selected missing checklist items.
+Optimize the current resume by improving action verbs, technical phrasing, and keyword alignment strictly addressing the selected items.
 
-CRITICAL RULES:
-1. NO FABRICATED EXPERIENCE: Do not invent past jobs, fake companies, or fake metrics.
-2. DO NOT INVENT ADDITIONAL REQUIREMENTS: Stick to the selected items and frozen profile.
-3. TRUTHFUL INTEGRATION: If adding missing skills/projects, integrate them cleanly without claiming unverified work history.
-4. EXPLAIN EVERY CHANGE: State what was changed and why.`;
+CRITICAL TRUTH & FACT PRESERVATION RULES:
+1. NEVER INVENT METRICS: Do not create fake percentages, dollar amounts, team sizes, or multiplier metrics (e.g., do NOT invent "45% improvement" or "team of 12").
+2. NEVER INVENT TECHNOLOGIES: Only use technical skills that exist in the original resume. If the target requires Rust or Django and the user lacks it, DO NOT add it.
+3. NEVER INVENT COMPANIES OR JOBS: Keep exact company names, roles, and dates.
+4. PRESERVE SENIORITY: Do not promote interns or junior developers to Senior/Lead/Architect.
+5. PRESERVE FACTUAL ABSENCE: If original has 0 projects or 0 certifications, do not fabricate new sections.
+6. PROVIDE STRUCTURED PROVENANCE: For every bullet improved, state the exact original text, generated text, reason, and change type.`;
 
     const schema = {
       type: Type.OBJECT,
       properties: {
         tailoredContent: { type: Type.STRING, description: "Complete, professionally optimized resume in Markdown format." },
+        changes: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              section: { type: Type.STRING },
+              originalText: { type: Type.STRING },
+              generatedText: { type: Type.STRING },
+              reason: { type: Type.STRING },
+              relatedRequirementId: { type: Type.STRING },
+              evidenceQuote: { type: Type.STRING },
+              changeType: { type: Type.STRING, description: "REPHRASE, REORDER, CONDENSE, KEYWORD_ALIGNMENT, SECTION_RESTRUCTURE, CLARIFICATION, or USER_APPROVED_ADDITION" }
+            },
+            required: ["section", "originalText", "generatedText", "reason", "changeType"]
+          }
+        },
         explanations: {
           type: Type.ARRAY,
           items: {
@@ -988,10 +1037,10 @@ CRITICAL RULES:
           }
         }
       },
-      required: ["tailoredContent", "explanations"]
+      required: ["tailoredContent", "changes", "explanations"]
     };
 
-    const prompt = `Resume Context:\n${resumeText}\n\nSelected Items to Address:\n${JSON.stringify(selectedItems)}\n\nFrozen Profile:\n${JSON.stringify(frozenProfile)}`;
+    const prompt = `Original Resume Content:\n${resumeText}\n\nSelected Target Checklist Items:\n${JSON.stringify(selectedItems)}\n\nFrozen Requirement Profile:\n${JSON.stringify(frozenProfile)}`;
 
     const response = await ai.models.generateContent({
       model: "gemini-1.5-flash",
@@ -999,7 +1048,7 @@ CRITICAL RULES:
       config: { 
         responseMimeType: "application/json", 
         responseSchema: schema,
-        temperature: 0.2
+        temperature: 0.1
       }
     });
 
@@ -1010,9 +1059,33 @@ CRITICAL RULES:
 
     const result = JSON.parse(responseText);
 
-    if (!validateTailorBatch(result)) {
-      return sendError(res, "INVALID_AI_OUTPUT", "Batch tailoring output failed validation.", 502);
+    // 3. Stage 4 Post-Generation Deterministic Factual Validation
+    const validation = validateTailoredResume(
+      beforeParsed,
+      resumeText,
+      result.tailoredContent,
+      userApprovedAdditions || {}
+    );
+
+    if (!validation.isValid) {
+      return sendError(
+        res,
+        "FACTUAL_VALIDATION_FAILED",
+        "Generated resume contained unsupported claims or unpossessed skills.",
+        422,
+        validation.validationErrors
+      );
     }
+
+    // 4. Compute After-Tailoring Stage 3 Evaluation
+    const afterEval = evaluateResumeAgainstRequirements(beforeParsed, structuredReqs, result.tailoredContent);
+    const scoreComparison = compareScores(beforeEval, afterEval);
+    const finality = evaluateFinality(validation, scoreComparison);
+
+    result.scoreComparison = scoreComparison;
+    result.validation = validation;
+    result.isFinalVersion = finality.isFinalVersion;
+    result.finalityStatus = finality.finalityStatus;
 
     return sendSuccess(res, result);
   } catch (error: any) {
