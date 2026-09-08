@@ -233,6 +233,10 @@ export interface RequirementProfile {
   isFrozen?: boolean;
   structuredRequirements?: TargetRequirement[];
 
+  // Stage 6 Real Job Association
+  jobId?: string;
+  snapshotId?: string;
+
   // Legacy & Categorized String arrays for UI compatibility
   requiredSkills: string[];
   preferredSkills: string[];
@@ -375,6 +379,152 @@ export interface ExportMetadata {
   resumeVersionId?: string;
   profileHash?: string;
   byteSize: number;
+}
+
+// ============================================================================
+// STAGE 6: UNIVERSAL JOB DATA FOUNDATION TYPES
+// ============================================================================
+
+export type JobProvider =
+  | "GREENHOUSE"
+  | "LEVER"
+  | "ASHBY"
+  | "WORKABLE"
+  | "SMARTRECRUITERS"
+  | "ADZUNA"
+  | "USAJOBS"
+  | "REMOTEOK"
+  | "ARBEITNOW"
+  | "JOOBLE"
+  | "JSEARCH"
+  | "JSON_LD"
+  | "SEMANTIC_HTML"
+  | "USER_URL"
+  | "USER_PASTED";
+
+export type JobSourceType =
+  | "ATS_API"
+  | "AGGREGATOR"
+  | "WEB_JSON_LD"
+  | "SEMANTIC_HTML"
+  | "USER_INPUT";
+
+export type JobConfidence =
+  | "VERIFIED_ATS"
+  | "PUBLIC_PAGE"
+  | "USER_PROVIDED"
+  | "LOW_CONFIDENCE";
+
+export interface JobSourceReference {
+  sourceId: string;
+  provider: JobProvider;
+  sourceType: JobSourceType;
+  sourceUrl: string | null;
+  sourceDomain?: string;
+  retrievedAt: string;
+  sourceConfidence: JobConfidence;
+}
+
+export interface CompanyEntity {
+  companyId: string;
+  canonicalName: string;
+  rawName?: string;
+  aliases: string[];
+  domains: string[];
+  careerDomains: string[];
+  detectedSources: JobSourceReference[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type JobStatus =
+  | "ACTIVE"
+  | "EXPIRED"
+  | "REMOVED"
+  | "UNKNOWN";
+
+export interface Job {
+  jobId: string;
+  companyId: string;
+  companyName: string;
+  title: string;
+  canonicalTitle?: string;
+  canonicalRole?: string;
+  experienceLevel?: string;
+  location?: string;
+  employmentType?: string;
+  source: JobSourceReference;
+  currentSnapshotId: string;
+  status: JobStatus;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type JobExtractionStatus =
+  | "VERIFIED"
+  | "NEEDS_REVIEW"
+  | "FAILED";
+
+export interface JobStructuredMetadata {
+  datePosted?: string;
+  validThrough?: string;
+  hiringOrganization?: string;
+  location?: string;
+  employmentType?: string;
+  skills?: string[];
+  salary?: string;
+  experienceRequirements?: string;
+  educationRequirements?: string;
+}
+
+export interface JobSnapshot {
+  snapshotId: string;
+  jobId: string;
+  retrievedAt: string;
+  sourceUrl: string | null;
+  sourceDomain?: string;
+  contentHash: string;
+  title: string;
+  description: string;
+  structuredMetadata?: JobStructuredMetadata;
+  requirements: TargetRequirement[];
+  extractionStatus: JobExtractionStatus;
+  evidenceQuality: number;
+  createdAt: string;
+}
+
+export interface JobSource {
+  sourceId: string;
+  provider: JobProvider;
+  sourceType: JobSourceType;
+  endpoint?: string;
+  termsVerified?: boolean;
+  rateLimitKnown?: boolean;
+  attributionRequired?: boolean;
+  storagePolicy?: string;
+  enabled: boolean;
+}
+
+export interface JobSourceInput {
+  url?: string;
+  company?: string;
+  role?: string;
+  rawText?: string;
+  provider?: JobProvider;
+}
+
+export interface JobFetchResult {
+  success: boolean;
+  job?: Job;
+  snapshot?: JobSnapshot;
+  company?: CompanyEntity;
+  error?: {
+    code: string;
+    message: string;
+    details?: any;
+  };
 }
 
 

@@ -28,6 +28,7 @@ import {
 import {
   validateExportReadiness
 } from "./src/lib/exportValidator";
+import { globalJobIngestionEngine } from "./src/lib/jobEngine";
 import { ParsedResume } from "./src/types";
 
 dotenv.config({ path: ".env.local" });
@@ -1164,6 +1165,88 @@ app.post("/api/export-resume-html", (req, res) => {
   } catch (error: any) {
     console.error("Error in /api/export-resume-html:", error);
     return sendError(res, "PDF_GENERATION_FAILED", "Failed to render printable document.", 500);
+  }
+});
+
+// ============================================================================
+// STAGE 6: UNIVERSAL JOB INGESTION API ROUTES
+// ============================================================================
+
+app.post("/api/jobs/resolve-source", (req, res) => {
+  try {
+    const { url, company, role, rawText } = req.body;
+    const resolved = globalJobIngestionEngine.resolveSource({ url, company, role, rawText });
+    return sendSuccess(res, resolved);
+  } catch (error: any) {
+    return sendError(res, "SOURCE_RESOLUTION_FAILED", "Failed to resolve job source.", 500, error.message);
+  }
+});
+
+app.post("/api/jobs/import-url", async (req, res) => {
+  try {
+    const { url, company, role } = req.body;
+    if (!url || typeof url !== "string") {
+      return sendError(res, "INVALID_URL", "URL is required to import job.", 400);
+    }
+    const result = await globalJobIngestionEngine.importJobUrl(url, company, role);
+    if (!result.success) {
+      return sendError(res, result.error?.code || "JOB_IMPORT_FAILED", result.error?.message || "Failed to import job from URL.", 422, result.error?.details);
+    }
+    return sendSuccess(res, result);
+  } catch (error: any) {
+    return sendError(res, "JOB_IMPORT_FAILED", "Failed to import job from URL.", 500, error.message);
+  }
+});
+
+app.post("/api/jobs/import-text", async (req, res) => {
+  try {
+    const { rawText, company, role } = req.body;
+    if (!rawText || typeof rawText !== "string") {
+      return sendError(res, "INVALID_TEXT", "Job description text is required.", 400);
+    }
+    const result = await globalJobIngestionEngine.importJobText(rawText, company, role);
+    if (!result.success) {
+      return sendError(res, result.error?.code || "JOB_EXTRACTION_FAILED", result.error?.message || "Failed to extract job from text.", 422, result.error?.details);
+    }
+    return sendSuccess(res, result);
+  } catch (error: any) {
+    return sendError(res, "JOB_EXTRACTION_FAILED", "Failed to process job text.", 500, error.message);
+  }
+});
+
+app.post("/api/jobs/ingest", async (req, res) => {
+  try {
+    const input = req.body;
+    const result = await globalJobIngestionEngine.ingestJob(input);
+    if (!result.success) {
+      return sendError(res, result.error?.code || "INGEST_FAILED", result.error?.message || "Failed to ingest job.", 422, result.error?.details);
+    }
+    return sendSuccess(res, result);
+  } catch (error: any) {
+    return sendError(res, "INGEST_FAILED", "Failed to ingest job.", 500, error.message);
+  }
+});
+
+app.get("/api/jobs/:jobId", (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = globalJobIngestionEngine.getJob(jobId);
+    if (!job) {
+      return sendError(res, "JOB_NOT_FOUND", `Job ${jobId} not found.`, 404);
+    }
+    return sendSuccess(res, { job });
+  } catch (error: any) {
+    return sendError(res, "JOB_QUERY_FAILED", "Failed to retrieve job.", 500, error.message);
+  }
+});
+
+app.get("/api/jobs/:jobId/snapshots", (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const snapshots = globalJobIngestionEngine.getJobSnapshots(jobId);
+    return sendSuccess(res, { snapshots, count: snapshots.length });
+  } catch (error: any) {
+    return sendError(res, "SNAPSHOT_QUERY_FAILED", "Failed to retrieve job snapshots.", 500, error.message);
   }
 });
 

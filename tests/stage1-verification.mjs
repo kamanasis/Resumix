@@ -357,11 +357,7 @@ B.S. in Computer Science, State University (2018 - 2022)
   console.log(`TEST RESULTS: ${passed} PASSED, ${failed} FAILED, ${skipped} SKIPPED`);
   console.log("=================================================\n");
 
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    process.exit(0);
-  }
+  process.exitCode = failed > 0 ? 1 : 0;
 }
 
 runTests();
