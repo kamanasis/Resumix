@@ -54,15 +54,33 @@
   border-right: 1px solid rgba(6, 182, 212, 0.15);
 }
 
-/* Standard visible cursor styling */
+/* 3D Custom Cursor styling */
+html.has-custom-cursor,
+html.has-custom-cursor body {
+  cursor: none !important;
+}
+
+html.has-custom-cursor a,
+html.has-custom-cursor button,
+html.has-custom-cursor select,
+html.has-custom-cursor [role="button"],
+html.has-custom-cursor .cursor-pointer,
+html.has-custom-cursor .clickable-cursor {
+  cursor: none !important;
+}
+
+html.has-custom-cursor input,
+html.has-custom-cursor textarea {
+  cursor: text;
+}
+
+/* Fallback visible cursor when custom cursor is inactive */
 body, html {
   cursor: default;
 }
-
 a, button, select, [role="button"], .cursor-pointer, .clickable-cursor {
   cursor: pointer;
 }
-
 input, textarea {
   cursor: text;
 }
