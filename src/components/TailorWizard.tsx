@@ -3,11 +3,13 @@ import { ResumeFile, GapReport, RequirementProfile, ParsedResume, MissingItem, T
 import { 
   Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, 
   Compass, Info, Cpu, AlertTriangle, CheckSquare, Lock, 
-  RefreshCw, XCircle, ArrowLeft
+  RefreshCw, XCircle, ArrowLeft, Printer, FileText, FileSpreadsheet
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
+import { validateExportReadiness, verifyExportContentIntegrity } from "../lib/exportValidator";
+import { sanitizeExportFileName, generateDocxBlob, generatePrintableHtml, triggerDownload } from "../lib/exportEngine";
 
 interface TailorWizardProps {
   userId: string;
@@ -282,20 +284,55 @@ export default function TailorWizard({
     setTailorRecommendation(null);
   };
 
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedText(true);
     setTimeout(() => setCopiedText(false), 2000);
   };
 
-  const downloadTextFile = (filename: string, content: string) => {
-    const element = document.createElement("a");
-    const file = new Blob([content], { type: "text/plain" });
-    element.href = URL.createObjectURL(file);
-    element.download = filename;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+  const handleExport = (format: "pdf" | "docx" | "md" | "print") => {
+    setExportError(null);
+    const content = batchResult?.tailoredContent || selectedResume?.content || "";
+    
+    // Stage 5: Strict Validation Gate
+    const validation = validateExportReadiness({
+      status: batchResult ? "FINAL_OPTIMIZED" : "DRAFT",
+      tailoredContent: content,
+      parsedResume: parsedResume || undefined,
+    });
+
+    if (!validation.isValid) {
+      setExportError(`Export blocked: ${validation.errors.join(", ")}`);
+      return;
+    }
+
+    const candidateName = parsedResume?.name || "Candidate";
+    const filename = sanitizeExportFileName(candidateName, targetCompany, targetRole, format === "docx" ? "docx" : format === "md" ? "md" : "html");
+
+    if (format === "docx") {
+      const docxBlob = generateDocxBlob(content, `${targetRole} - ${candidateName}`);
+      triggerDownload(docxBlob, filename);
+    } else if (format === "md") {
+      const mdBlob = new Blob([content], { type: "text/markdown;charset=utf-8;" });
+      triggerDownload(mdBlob, filename);
+    } else if (format === "pdf" || format === "print") {
+      const htmlContent = generatePrintableHtml(content, `${targetRole} - ${candidateName}`);
+      const printWindow = window.open("", "_blank");
+      if (printWindow) {
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => {
+          printWindow.print();
+        }, 500);
+      } else {
+        // Fallback to direct download of printable HTML
+        const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8;" });
+        triggerDownload(htmlBlob, filename);
+      }
+    }
   };
 
   // -------------------------------------------------------------------------------- //
@@ -379,14 +416,26 @@ export default function TailorWizard({
 
         <p className="text-slate-500 text-xs mb-6">No unaddressed critical gaps detected against available specifications.</p>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap justify-center gap-3">
           <button 
-            onClick={() => downloadTextFile(`${targetCompany}_Tailored_Resume.md`, batchResult?.tailoredContent || selectedResume?.content || "")}
-            className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-[0_4px_20px_rgba(34,197,94,0.3)] text-xs"
+            onClick={() => handleExport("pdf")}
+            className="px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-[0_4px_20px_rgba(34,197,94,0.3)] text-xs"
           >
-            <Download className="w-4 h-4" /> Download Resume (Markdown)
+            <Printer className="w-3.5 h-3.5" /> Export PDF
           </button>
-          <button onClick={() => setStep("SETUP")} className="px-6 py-3 bg-white text-slate-600 border border-slate-200 font-bold rounded-xl hover:bg-slate-50 transition-all text-xs">
+          <button 
+            onClick={() => handleExport("docx")}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-sm text-xs"
+          >
+            <FileText className="w-3.5 h-3.5" /> Word (.docx)
+          </button>
+          <button 
+            onClick={() => handleExport("md")}
+            className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl flex items-center gap-2 transition-all shadow-sm text-xs"
+          >
+            <Download className="w-3.5 h-3.5" /> Markdown (.md)
+          </button>
+          <button onClick={() => setStep("SETUP")} className="px-5 py-2.5 bg-white text-slate-600 border border-slate-200 font-bold rounded-xl hover:bg-slate-50 transition-all text-xs">
             Start New Target
           </button>
         </div>
@@ -676,22 +725,47 @@ export default function TailorWizard({
               )}
             </div>
 
-            <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200">
-              <span className="text-sm font-bold text-slate-800">Optimized Resume Draft (Markdown)</span>
-              <div className="flex gap-2">
+            {exportError && (
+              <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3 text-red-700 text-xs font-semibold">
+                <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
+                <span>{exportError}</span>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200">
+              <span className="text-sm font-bold text-slate-800">Export Tailored Resume</span>
+              <div className="flex flex-wrap gap-2">
                 <button 
                   onClick={() => copyToClipboard(batchResult?.tailoredContent || "")}
                   className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg flex items-center gap-1 transition-all"
+                  title="Copy formatted markdown to clipboard"
                 >
-                  {copiedText ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedText ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedText ? "Copied" : "Copy"}</span>
                 </button>
                 <button 
-                  onClick={() => downloadTextFile(`${targetCompany}_Tailored_Resume.md`, batchResult?.tailoredContent || "")}
-                  className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition-all shadow-sm"
+                  onClick={() => handleExport("pdf")}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
+                  title="Export cleanly formatted PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>PDF / Print</span>
+                </button>
+                <button 
+                  onClick={() => handleExport("docx")}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
+                  title="Export standard Word .docx document"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Word (.docx)</span>
+                </button>
+                <button 
+                  onClick={() => handleExport("md")}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-sm"
+                  title="Export raw Markdown format"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Download (.md)</span>
+                  <span>Markdown</span>
                 </button>
               </div>
             </div>

@@ -364,4 +364,18 @@ export interface TailoredResumeVersion {
   validationErrors?: string[];
 }
 
+// Stage 5 Types: Export & Production Hardening
+export type ExportFormat = "PDF" | "DOCX" | "MARKDOWN" | "PRINT";
+export type ExportStatus = "IDLE" | "PREPARING" | "EXPORTED" | "EXPORT_FAILED";
+
+export interface ExportMetadata {
+  format: ExportFormat;
+  filename: string;
+  exportedAt: string;
+  resumeVersionId?: string;
+  profileHash?: string;
+  byteSize: number;
+}
+
+
 

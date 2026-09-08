@@ -21,6 +21,13 @@ import {
   compareScores,
   evaluateFinality
 } from "./src/lib/tailoringEngine";
+import {
+  generatePrintableHtml,
+  sanitizeExportFileName
+} from "./src/lib/exportEngine";
+import {
+  validateExportReadiness
+} from "./src/lib/exportValidator";
 import { ParsedResume } from "./src/types";
 
 dotenv.config({ path: ".env.local" });
@@ -1091,6 +1098,72 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
   } catch (error: any) {
     console.error("Error in /api/tailor-resume-batch:", error);
     return sendError(res, "BATCH_TAILOR_ERROR", "Failed to perform batch tailoring.", 500, error.message || String(error));
+  }
+});
+
+// Stage 5 Pipeline: Server-Side DOCX & Print HTML Export Endpoints (0 AI Calls)
+app.post("/api/export-resume-docx", (req, res) => {
+  try {
+    const { tailoredContent, parsedResume, targetCompany, targetRole } = req.body;
+    if (!tailoredContent || typeof tailoredContent !== "string") {
+      return sendError(res, "INVALID_EXPORT_DATA", "tailoredContent is required for export.", 400);
+    }
+
+    const readiness = validateExportReadiness({ tailoredContent, isValid: true, finalityStatus: "FINAL_OPTIMIZED" });
+    if (!readiness.canExport) {
+      return sendError(res, "EXPORT_VALIDATION_FAILED", "Resume is not in valid exportable state.", 422, readiness.errors);
+    }
+
+    const filename = sanitizeExportFileName(parsedResume?.contactInfo?.name, targetRole, "docx");
+    const htmlBody = generatePrintableHtml(tailoredContent, parsedResume);
+    const docxTemplate = `
+<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+  <meta charset="utf-8">
+  <title>${filename}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
+  <style>
+    body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.3; color: #000; }
+    h1 { font-size: 18pt; font-weight: bold; border-bottom: 2pt solid #000; margin-bottom: 4pt; }
+    h2 { font-size: 13pt; font-weight: bold; border-bottom: 1pt solid #666; margin-top: 12pt; margin-bottom: 4pt; }
+    h3 { font-size: 11pt; font-weight: bold; margin-top: 8pt; margin-bottom: 2pt; }
+    li { font-size: 10.5pt; margin-bottom: 3pt; }
+  </style>
+</head>
+<body>
+  ${htmlBody}
+</body>
+</html>`;
+
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Type", "application/msword");
+    return res.send(docxTemplate);
+  } catch (error: any) {
+    console.error("Error in /api/export-resume-docx:", error);
+    return sendError(res, "DOCX_GENERATION_FAILED", "Failed to generate DOCX document.", 500);
+  }
+});
+
+app.post("/api/export-resume-html", (req, res) => {
+  try {
+    const { tailoredContent, parsedResume } = req.body;
+    if (!tailoredContent || typeof tailoredContent !== "string") {
+      return sendError(res, "INVALID_EXPORT_DATA", "tailoredContent is required.", 400);
+    }
+
+    const html = generatePrintableHtml(tailoredContent, parsedResume);
+    return sendSuccess(res, { html });
+  } catch (error: any) {
+    console.error("Error in /api/export-resume-html:", error);
+    return sendError(res, "PDF_GENERATION_FAILED", "Failed to render printable document.", 500);
   }
 });
 

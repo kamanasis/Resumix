@@ -189,3 +189,45 @@
   background-color: #1e293b;
   color: #22d3ee;
 }
+
+/* ============================================================================
+   STAGE 5: ATS-COMPLIANT PRINT STYLING
+   ============================================================================ */
+@media print {
+  /* Hide all UI Chrome & Navigation */
+  header, nav, aside, .glass-sidebar, button, .cursor-3d-dot, .cursor-3d-ring, 
+  .fixed, [role="button"], .no-print {
+    display: none !important;
+  }
+
+  body, html {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 10.5pt !important;
+    line-height: 1.4 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    cursor: auto !important;
+  }
+
+  .print-container {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0.5in !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+  }
+
+  h1, h2, h3, h4, p, li, strong {
+    color: #000000 !important;
+  }
+
+  h1 { font-size: 18pt !important; margin-bottom: 4pt !important; border-bottom: 2pt solid #000 !important; }
+  h2 { font-size: 12pt !important; margin-top: 10pt !important; margin-bottom: 3pt !important; border-bottom: 1pt solid #ccc !important; page-break-after: avoid !important; }
+  h3 { font-size: 10.5pt !important; margin-top: 6pt !important; margin-bottom: 2pt !important; page-break-after: avoid !important; }
+  li { font-size: 9.5pt !important; page-break-inside: avoid !important; }
+  a { color: #000000 !important; text-decoration: none !important; }
+}
+
