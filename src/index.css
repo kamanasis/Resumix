@@ -54,59 +54,17 @@
   border-right: 1px solid rgba(6, 182, 212, 0.15);
 }
 
-/* Base custom cursor styling */
-@media (pointer: fine) {
-  body, html {
-    cursor: none !important;
-  }
-  
-  a, button, select, input, textarea, [role="button"], .cursor-pointer, .clickable-cursor {
-    cursor: none !important;
-  }
+/* Standard visible cursor styling */
+body, html {
+  cursor: default;
 }
 
-.cursor-3d-dot {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 8px;
-  height: 8px;
-  background-color: #06b6d4;
-  border-radius: 50%;
-  pointer-events: none;
-  z-index: 99999;
-  transform: translate(-50%, -50%);
-  transition: width 0.1s, height 0.1s, background-color 0.2s;
+a, button, select, [role="button"], .cursor-pointer, .clickable-cursor {
+  cursor: pointer;
 }
 
-.cursor-3d-ring {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 36px;
-  height: 36px;
-  border: 2px solid rgba(6, 182, 212, 0.5);
-  border-radius: 50%;
-  pointer-events: none;
-  z-index: 99998;
-  transform: translate(-50%, -50%);
-  transition: transform 0.08s cubic-bezier(0.25, 1, 0.5, 1), width 0.2s, height 0.2s, border-color 0.2s, background-color 0.2s;
-  box-shadow: 0 0 10px rgba(6, 182, 212, 0.2), inset 0 0 6px rgba(6, 182, 212, 0.1);
-}
-
-/* Hover active state for 3D cursor */
-.cursor-hover .cursor-3d-ring {
-  width: 50px;
-  height: 50px;
-  border-color: rgba(6, 182, 212, 0.8);
-  background-color: rgba(6, 182, 212, 0.1);
-  box-shadow: 0 0 15px rgba(6, 182, 212, 0.4), inset 0 0 10px rgba(6, 182, 212, 0.2);
-}
-
-.cursor-hover .cursor-3d-dot {
-  width: 12px;
-  height: 12px;
-  background-color: #22d3ee;
+input, textarea {
+  cursor: text;
 }
 
 /* Markdown parsing typography styling */
