@@ -48,6 +48,19 @@ export default function TailorWizard({
   const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored">("checklist");
   const [copiedText, setCopiedText] = useState(false);
 
+  // Cross-Resume State Isolation (Part 26 - Resume Version Integrity)
+  React.useEffect(() => {
+    setStep("SETUP");
+    setFrozenProfile(null);
+    setParsedResume(null);
+    setGapReport(null);
+    setSelectedItems([]);
+    setBatchResult(null);
+    setActiveMissingItem(null);
+    setTailorRecommendation(null);
+    setErrorDetails({ title: "", message: "" });
+  }, [selectedResume?.id]);
+
   const startPipeline = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     
@@ -59,6 +72,17 @@ export default function TailorWizard({
       setStep("ERROR");
       return;
     }
+
+    // Pre-Analysis Resume Quality Gate (Part 22)
+    if (selectedResume.extractionStatus === "EXTRACTION_FAILED") {
+      setErrorDetails({
+        title: "Resume Extraction Incomplete",
+        message: "The selected resume has an incomplete or corrupted text extraction. Please edit or re-upload the file in your Resume Vault before running an ATS analysis."
+      });
+      setStep("ERROR");
+      return;
+    }
+
     if (!targetCompany.trim() || !targetRole.trim()) {
       setErrorDetails({
         title: "Missing Target Information",

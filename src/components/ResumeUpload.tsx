@@ -1,46 +1,16 @@
 import React, { useState, useRef } from "react";
-import { UploadCloud, FileText, CheckCircle, AlertCircle, Edit, Save, ClipboardPaste, RefreshCw } from "lucide-react";
+import { 
+  UploadCloud, FileText, CheckCircle, AlertCircle, Edit, Save, 
+  ClipboardPaste, ShieldCheck, AlertTriangle, Layers, Award
+} from "lucide-react";
 import { collection, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
+import { validateExtraction } from "../lib/extractionValidator";
+import { ExtractionQuality, ExtractionStatus } from "../types";
 
 interface ResumeUploadProps {
   userId: string;
   onUploadSuccess: () => void;
-}
-
-// Resume text validation helper (Part 15 - Resume Input Validation)
-function validateResumeText(text: string): { isValid: boolean; message?: string } {
-  if (!text || typeof text !== "string") {
-    return { isValid: false, message: "Resume text is empty." };
-  }
-
-  const trimmed = text.trim();
-  if (trimmed.length < 50) {
-    return { 
-      isValid: false, 
-      message: "Extracted resume content is suspiciously short (< 50 characters). Please paste your full resume text or upload a cleaner file." 
-    };
-  }
-
-  // Count alphanumeric vs total characters to detect binary/corrupted extraction
-  const alphaNumericMatches = trimmed.match(/[a-zA-Z0-9]/g) || [];
-  const ratio = alphaNumericMatches.length / trimmed.length;
-  if (ratio < 0.45) {
-    return { 
-      isValid: false, 
-      message: "Resume extraction appears corrupted or contains excessive binary symbols. Please review the text or paste your resume manually." 
-    };
-  }
-
-  // Detect extreme repeated characters (e.g. "aaaaaaa...")
-  if (/(.)\1{20,}/.test(trimmed)) {
-    return {
-      isValid: false,
-      message: "Resume contains repeated character patterns indicating an extraction error. Please review the text."
-    };
-  }
-
-  return { isValid: true };
 }
 
 export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadProps) {
@@ -53,7 +23,14 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
   const [manualContent, setManualContent] = useState("");
   
   // States for verification modal/view
-  const [parsedFile, setParsedFile] = useState<{ name: string; size: number; type: string; content: string } | null>(null);
+  const [parsedFile, setParsedFile] = useState<{ 
+    name: string; 
+    size: number; 
+    type: string; 
+    content: string;
+    status: ExtractionStatus;
+    quality: ExtractionQuality;
+  } | null>(null);
   const [editContent, setEditContent] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -116,28 +93,25 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
         });
       }
 
-      const validation = validateResumeText(textContent);
-      if (!validation.isValid) {
-        // Still allow opening the verification editor so user can paste/fix their text
-        setParsedFile({
-          name: file.name,
-          size: file.size,
-          type: file.type || "application/octet-stream",
-          content: textContent || "",
-        });
-        setEditContent(textContent || "");
-        setError(validation.message || "Resume extraction appears incomplete. Please review and edit the text below.");
-        return;
-      }
+      const { status, quality, userMessage } = validateExtraction(textContent, {
+        name: file.name,
+        size: file.size,
+        type: file.type || "application/octet-stream"
+      });
 
-      // Open preview editor so users can adjust/verify parsed contents
       setParsedFile({
         name: file.name,
         size: file.size,
         type: file.type || "application/octet-stream",
-        content: textContent,
+        content: textContent || "",
+        status,
+        quality
       });
-      setEditContent(textContent);
+      setEditContent(textContent || "");
+
+      if (status === "EXTRACTION_FAILED" || status === "EXTRACTION_PARTIAL") {
+        setError(userMessage);
+      }
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Failed to parse file. You can paste the resume text manually.");
@@ -176,10 +150,16 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
   const handleSaveToFirestore = async () => {
     if (!parsedFile) return;
     
-    // Validate before committing
-    const validation = validateResumeText(editContent);
-    if (!validation.isValid) {
-      setError(validation.message || "Resume content is invalid.");
+    // Re-evaluate edited content
+    const isEdited = editContent !== parsedFile.content;
+    const { status, quality, userMessage } = validateExtraction(editContent, {
+      name: parsedFile.name,
+      size: editContent.length,
+      type: parsedFile.type
+    });
+
+    if (status === "EXTRACTION_FAILED") {
+      setError(userMessage || "Resume content is invalid or too short.");
       return;
     }
 
@@ -193,11 +173,19 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
       await setDoc(resumeDocRef, {
         id: resumeId,
         userId: userId,
-        name: parsedFile.name || "My Resume.txt",
+        name: parsedFile.name || "My_Resume.txt",
         size: editContent.length,
         type: parsedFile.type || "text/plain",
         uploadedAt: new Date().toISOString(),
         content: editContent.trim(),
+        extractionStatus: status,
+        extractionQuality: quality,
+        originalFileMeta: {
+          name: parsedFile.name,
+          size: parsedFile.size,
+          type: parsedFile.type
+        },
+        isUserEdited: isEdited
       });
 
       setSuccess(`Resume "${parsedFile.name}" verified and saved to vault!`);
@@ -217,9 +205,14 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const title = manualTitle.trim() || "Manual_Resume.txt";
-    const validation = validateResumeText(manualContent);
-    if (!validation.isValid) {
-      setError(validation.message || "Please provide valid resume text.");
+    const { status, quality, userMessage } = validateExtraction(manualContent, {
+      name: title,
+      size: manualContent.length,
+      type: "text/plain"
+    });
+
+    if (status === "EXTRACTION_FAILED") {
+      setError(userMessage || "Please provide valid resume text.");
       return;
     }
 
@@ -238,6 +231,14 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
         type: "text/plain",
         uploadedAt: new Date().toISOString(),
         content: manualContent.trim(),
+        extractionStatus: "EXTRACTION_SUCCESS",
+        extractionQuality: quality,
+        originalFileMeta: {
+          name: title,
+          size: manualContent.length,
+          type: "text/plain"
+        },
+        isUserEdited: false
       });
 
       setSuccess(`Resume "${title}" successfully created and saved!`);
@@ -257,15 +258,15 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
     <div className="w-full space-y-4">
       {/* Notifications */}
       {error && (
-        <div className="p-4 bg-red-50/90 backdrop-blur-md border border-red-200 rounded-2xl text-red-800 text-sm flex items-start gap-3 animate-fadeIn">
-          <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+        <div className="p-4 bg-amber-50/90 backdrop-blur-md border border-amber-200 rounded-2xl text-amber-900 text-sm flex items-start gap-3 animate-fadeIn">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div className="flex-1">
-            <span className="font-semibold block">Resume Validation Alert</span>
-            <span className="text-xs text-red-700">{error}</span>
+            <span className="font-semibold block">Extraction Notice</span>
+            <span className="text-xs text-amber-800">{error}</span>
           </div>
           <button
             onClick={() => setError("")}
-            className="text-red-400 hover:text-red-600 text-xs font-bold"
+            className="text-amber-600 hover:text-amber-800 text-xs font-bold"
           >
             Dismiss
           </button>
@@ -321,7 +322,7 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
             {loading && (
               <div className="absolute inset-0 bg-white/80 backdrop-blur-md rounded-3xl flex flex-col items-center justify-center z-10">
                 <div className="w-8 h-8 border-3 border-cyan-100 border-t-cyan-600 rounded-full animate-spin mb-2" />
-                <p className="text-cyan-700 text-xs font-semibold">Extracting resume content...</p>
+                <p className="text-cyan-700 text-xs font-semibold">Extracting & validating resume content...</p>
               </div>
             )}
           </div>
@@ -412,16 +413,27 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
 
       {/* Verification & Text Customizer View */}
       {parsedFile && (
-        <div className="bg-white/70 backdrop-blur-xl border border-white rounded-3xl p-6 shadow-sm animate-fadeIn">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-cyan-100">
+        <div className="bg-white/70 backdrop-blur-xl border border-white rounded-3xl p-6 shadow-sm animate-fadeIn space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-cyan-100">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-cyan-100 border border-cyan-200 rounded-xl flex items-center justify-center text-cyan-600 shrink-0">
                 <FileText className="w-6 h-6" />
               </div>
               <div>
-                <h4 className="text-slate-800 font-display font-semibold text-sm">
-                  Review & Verify Extracted Content
-                </h4>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-slate-800 font-display font-semibold text-sm">
+                    Review Extracted Resume
+                  </h4>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                    parsedFile.status === "EXTRACTION_SUCCESS"
+                      ? "bg-emerald-100 text-emerald-800"
+                      : parsedFile.status === "EXTRACTION_PARTIAL"
+                      ? "bg-amber-100 text-amber-800"
+                      : "bg-red-100 text-red-800"
+                  }`}>
+                    {parsedFile.status.replace("EXTRACTION_", "")}
+                  </span>
+                </div>
                 <p className="text-slate-500 text-xs truncate max-w-xs sm:max-w-md">
                   File: {parsedFile.name} ({(parsedFile.size / 1024).toFixed(1)} KB)
                 </p>
@@ -454,21 +466,46 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
             </div>
           </div>
 
-          <div className="space-y-3">
+          {/* Quality Audit Stats Row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200 text-xs">
+            <div>
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">Characters</span>
+              <span className="font-mono font-bold text-slate-800">{editContent.length}</span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">Words</span>
+              <span className="font-mono font-bold text-slate-800">
+                {editContent.trim().split(/\s+/).filter(Boolean).length}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">Quality Score</span>
+              <span className="font-bold text-cyan-700">
+                {parsedFile.quality.qualityScore}/100
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">Sections Found</span>
+              <span className="font-semibold text-slate-700 truncate block">
+                {parsedFile.quality.detectedSections.length > 0 
+                  ? parsedFile.quality.detectedSections.join(", ") 
+                  : "None detected"}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-slate-500 text-xs flex items-center gap-1">
                 <Edit className="w-3.5 h-3.5 text-slate-400" />
-                Review extracted text below. Make sure all skills and experience are intact.
-              </span>
-              <span className="text-slate-400 text-xs font-mono">
-                {editContent.length} chars
+                Edit text directly below if any section was missed during extraction.
               </span>
             </div>
             <textarea
               value={editContent}
               onChange={(e) => setEditContent(e.target.value)}
               rows={10}
-              className="w-full p-4 bg-white/50 backdrop-blur-sm border border-slate-200 rounded-2xl text-slate-700 text-sm font-sans focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all resize-y"
+              className="w-full p-4 bg-white/50 backdrop-blur-sm border border-slate-200 rounded-2xl text-slate-700 text-xs font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all resize-y leading-relaxed"
               placeholder="Paste or edit resume text contents..."
             />
           </div>

@@ -1,4 +1,4 @@
-import { Trash2, FileText, Calendar, HardDrive, CheckCircle2 } from "lucide-react";
+import { Trash2, FileText, Calendar, HardDrive, CheckCircle2, AlertTriangle, ShieldCheck } from "lucide-react";
 import { ResumeFile } from "../types";
 import { deleteDoc, doc } from "firebase/firestore";
 import { db } from "../lib/firebase";
@@ -88,6 +88,8 @@ export default function ResumeList({
       <div className="grid gap-3">
         {resumes.map((resume) => {
           const isSelected = selectedResumeId === resume.id;
+          const status = resume.extractionStatus || "EXTRACTION_SUCCESS";
+          
           return (
             <div
               key={resume.id}
@@ -111,14 +113,37 @@ export default function ResumeList({
                   )}
                 </div>
 
-                <div className="min-w-0">
-                  <h4
-                    className={`text-sm font-semibold truncate ${
-                      isSelected ? "text-slate-900" : "text-slate-700"
-                    }`}
-                  >
-                    {resume.name}
-                  </h4>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h4
+                      className={`text-sm font-semibold truncate ${
+                        isSelected ? "text-slate-900" : "text-slate-700"
+                      }`}
+                    >
+                      {resume.name}
+                    </h4>
+
+                    {status === "EXTRACTION_SUCCESS" ? (
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md text-[9px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-0.5">
+                        <ShieldCheck className="w-2.5 h-2.5" /> Verified Text
+                      </span>
+                    ) : status === "EXTRACTION_PARTIAL" ? (
+                      <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md text-[9px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-0.5">
+                        <AlertTriangle className="w-2.5 h-2.5" /> Needs Review
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-red-50 text-red-700 border border-red-200 rounded-md text-[9px] font-bold uppercase tracking-wider shrink-0">
+                        Extraction Incomplete
+                      </span>
+                    )}
+
+                    {resume.isUserEdited && (
+                      <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] font-mono shrink-0">
+                        Edited
+                      </span>
+                    )}
+                  </div>
+
                   <div className="flex items-center gap-3 mt-1 text-slate-400 text-xs font-medium">
                     <span className="flex items-center gap-1 font-mono">
                       <HardDrive className="w-3.5 h-3.5" />

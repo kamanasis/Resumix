@@ -5,6 +5,30 @@ export interface UserProfile {
   displayName: string | null;
 }
 
+export type ExtractionStatus = 
+  | "EXTRACTION_PENDING" 
+  | "EXTRACTION_SUCCESS" 
+  | "EXTRACTION_PARTIAL" 
+  | "EXTRACTION_FAILED" 
+  | "EXTRACTION_UNVERIFIED";
+
+export interface ExtractionQuality {
+  charCount: number;
+  wordCount: number;
+  qualityScore: number;
+  isScanned: boolean;
+  isCorrupted: boolean;
+  detectedSections: string[];
+  warnings: string[];
+}
+
+export interface OriginalFileMeta {
+  name: string;
+  size: number;
+  type: string;
+  lastModified?: number;
+}
+
 export interface ResumeFile {
   id: string;
   userId: string;
@@ -12,7 +36,75 @@ export interface ResumeFile {
   size: number;
   type: string;
   uploadedAt: string;
-  content: string; // Plain text content of the resume
+  content: string; // Extracted plain text / markdown
+  extractionStatus?: ExtractionStatus;
+  extractionQuality?: ExtractionQuality;
+  originalFileMeta?: OriginalFileMeta;
+  isUserEdited?: boolean;
+}
+
+export interface SkillEvidence {
+  skill: string;
+  evidence: string; // Exact quote from resume
+}
+
+export interface ContactInfo {
+  name?: string;
+  email?: string;
+  phone?: string;
+  location?: string;
+  linkedin?: string;
+  github?: string;
+  website?: string;
+}
+
+export interface ParsedProject {
+  title: string;
+  description: string;
+  technologies?: string[];
+  role?: string;
+  impact?: string;
+}
+
+export interface ParsedExperience {
+  role: string;
+  company: string;
+  duration: string;
+  location?: string;
+  description: string;
+  bullets?: string[];
+}
+
+export interface ParsedEducation {
+  degree: string;
+  institution: string;
+  graduationYear?: string;
+  gpa?: string;
+}
+
+export interface ParsedResume {
+  id: string;
+  userId: string;
+  resumeId: string;
+  createdAt: string;
+  
+  contactInfo?: ContactInfo;
+  summary: string;
+  skills: string[];
+  skillEvidence?: SkillEvidence[];
+  projects: ParsedProject[];
+  experience: ParsedExperience[];
+  education: ParsedEducation[];
+  achievements: string[];
+  certifications: string[];
+  languages: string[];
+  tools: string[];
+  frameworks: string[];
+  softSkills: string[];
+  atsKeywords: string[];
+  responsibilities: string[];
+  quantifiedMetrics: string[];
+  parseStatus?: "PARSE_SUCCESS" | "PARSE_PARTIAL" | "PARSE_FAILED";
 }
 
 // V1 Legacy Analysis
@@ -74,38 +166,16 @@ export interface RequirementProfile {
   leadershipExpectations: string;
 }
 
-export interface ParsedResume {
-  id: string;
-  userId: string;
-  resumeId: string;
-  createdAt: string;
-  
-  skills: string[];
-  projects: any[]; // Or specific struct
-  experience: any[]; // Or specific struct
-  achievements: string[];
-  education: any[];
-  certifications: string[];
-  languages: string[];
-  tools: string[];
-  frameworks: string[];
-  softSkills: string[];
-  atsKeywords: string[];
-  summary: string;
-  responsibilities: string[];
-  quantifiedMetrics: string[];
-}
-
 export interface MissingItem {
   id: string;
   type: "Skill" | "ATS Keyword" | "Project" | "Achievement" | "Responsibility" | "Certification" | "Technology" | "Grammar" | "Formatting" | "Experience";
   title: string;
   importance: "Critical" | "Recommended" | "Optional";
   reason: string;
-  suggestedAddition: string; // Example addition
-  atsImpact: string; // e.g., "+3%"
+  suggestedAddition: string;
+  atsImpact: string;
   recruiterImpact: "High" | "Medium" | "Low";
-  confidenceScore: number; // 0-100
+  confidenceScore: number;
 }
 
 export interface GapReport {

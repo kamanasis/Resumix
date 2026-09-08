@@ -95,6 +95,8 @@ function validateParsedResume(data: any): boolean {
     if (!Array.isArray(data[field])) return false;
   }
   if (typeof data.summary !== "string") return false;
+  if (data.skillEvidence && !Array.isArray(data.skillEvidence)) return false;
+  if (data.contactInfo && typeof data.contactInfo !== "object") return false;
   return true;
 }
 
@@ -568,7 +570,7 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
   }
 });
 
-// V2 Deterministic Pipeline - Phase 2: Resume Parser
+// V2 Deterministic Pipeline - Phase 2: Resume Parser (Stage 2 Hardened)
 app.post("/api/parse-resume", async (req, res) => {
   try {
     const { resumeText } = req.body;
@@ -577,19 +579,48 @@ app.post("/api/parse-resume", async (req, res) => {
     }
 
     const ai = getAI();
-    const systemPrompt = `You are an exact Resume Entity Parser.
-Convert the raw resume text into structured JSON.
+    const systemPrompt = `You are a strict, objective Resume Entity Parser.
+Convert the raw resume text into a structured JSON representation adhering to FACT PRESERVATION.
 
-CRITICAL RULES:
-1. EXTRACT ONLY WHAT IS ACTUALLY WRITTEN in the resume text.
+CRITICAL TRUTH & FACT PRESERVATION RULES:
+1. EXTRACT ONLY WHAT IS ACTUALLY WRITTEN in the source text.
 2. DO NOT INVENT, ASSUME, OR FABRICATE ANY INFORMATION.
-3. If a section (e.g. certifications, projects, education) is not present in the text, leave the array empty ([]) or string empty ("").
-4. Never assume skills not mentioned in the resume.`;
+3. PRESERVE FACTUAL NAMES AND DATES:
+   - Do not change company names (e.g. keep "ABC Technologies" as is).
+   - Do not expand approximate dates (e.g. keep "2024" as "2024", do not guess "January 2024").
+4. SECTIONS ABSENT IN SOURCE: If a section (e.g. certifications, projects, experience) is not in the text, leave the array empty ([]) or string empty (""). DO NOT insert sample or placeholder data.
+5. SKILL EVIDENCE: For each extracted skill, capture the exact snippet / sentence from the resume as evidence.
+6. NO INFERRED SKILLS: If the resume says "built web applications", extract "Web Applications". DO NOT invent "Django" or "Spring Boot" unless explicitly mentioned.
+7. DEDUPLICATION: If multi-column formatting caused the same experience or project to repeat, extract only one clean instance.`;
     
     const schema = {
       type: Type.OBJECT,
       properties: {
-        skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+        contactInfo: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING },
+            email: { type: Type.STRING },
+            phone: { type: Type.STRING },
+            location: { type: Type.STRING },
+            linkedin: { type: Type.STRING },
+            github: { type: Type.STRING },
+            website: { type: Type.STRING }
+          }
+        },
+        summary: { type: Type.STRING, description: "Professional summary or objective if explicitly present in resume." },
+        skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Skills explicitly mentioned in resume" },
+        skillEvidence: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              skill: { type: Type.STRING },
+              evidence: { type: Type.STRING, description: "Exact sentence or context from resume confirming this skill" }
+            },
+            required: ["skill", "evidence"]
+          }
+        },
         projects: {
           type: Type.ARRAY,
           items: {
@@ -632,7 +663,6 @@ CRITICAL RULES:
         frameworks: { type: Type.ARRAY, items: { type: Type.STRING } },
         softSkills: { type: Type.ARRAY, items: { type: Type.STRING } },
         atsKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-        summary: { type: Type.STRING },
         responsibilities: { type: Type.ARRAY, items: { type: Type.STRING } },
         quantifiedMetrics: { type: Type.ARRAY, items: { type: Type.STRING } }
       },
@@ -669,6 +699,27 @@ CRITICAL RULES:
 
     if (!validateParsedResume(result)) {
       return sendError(res, "INVALID_AI_OUTPUT", "Parsed resume output failed validation.", 502);
+    }
+
+    // Deterministic deduplication in backend
+    if (Array.isArray(result.skills)) {
+      const seen = new Set<string>();
+      result.skills = result.skills.filter((s: string) => {
+        const lower = s.toLowerCase().trim();
+        if (!lower || seen.has(lower)) return false;
+        seen.add(lower);
+        return true;
+      });
+    }
+
+    if (Array.isArray(result.experience)) {
+      const expSeen = new Set<string>();
+      result.experience = result.experience.filter((exp: any) => {
+        const key = `${(exp.company || '').toLowerCase()}_${(exp.role || '').toLowerCase()}_${(exp.duration || '').toLowerCase()}`;
+        if (expSeen.has(key)) return false;
+        expSeen.add(key);
+        return true;
+      });
     }
 
     return sendSuccess(res, result);
