@@ -30,6 +30,11 @@ import {
 } from "./src/lib/exportValidator";
 import { globalJobIngestionEngine } from "./src/lib/jobEngine";
 import { globalIntelligenceEngine } from "./src/lib/intelligenceEngine";
+import { 
+  globalApplicationStore, 
+  globalOutcomeIntelligenceEngine, 
+  captureScoreSnapshot 
+} from "./src/lib/outcomeEngine";
 import { ParsedResume } from "./src/types";
 
 dotenv.config({ path: ".env.local" });
@@ -1315,6 +1320,145 @@ app.get("/api/intelligence/role/:roleId", async (req, res) => {
     return sendSuccess(res, profile);
   } catch (error: any) {
     return sendError(res, "ROLE_QUERY_FAILED", "Failed to query role intelligence.", 500, error.message);
+  }
+});
+
+// ============================================================================
+// APPLICATION TRACKING & OUTCOME INTELLIGENCE API ROUTES
+// ============================================================================
+
+app.post("/api/applications", async (req, res) => {
+  try {
+    const { userId, jobId, resumeId, companyName, roleTitle, scoreSnapshot } = req.body;
+    if (!userId || !jobId || !resumeId || !companyName || !roleTitle) {
+      return sendError(res, "INVALID_INPUT", "userId, jobId, resumeId, companyName, and roleTitle are required.", 400);
+    }
+    if (!scoreSnapshot || typeof scoreSnapshot !== "object") {
+      return sendError(res, "MISSING_SCORE_SNAPSHOT", "A valid application-time scoreSnapshot is required.", 400);
+    }
+    const appRecord = globalApplicationStore.createApplication(req.body);
+    return sendSuccess(res, appRecord, 201);
+  } catch (error: any) {
+    if (error.message?.includes("DUPLICATE_APPLICATION")) {
+      return sendError(res, "DUPLICATE_APPLICATION", error.message, 409);
+    }
+    return sendError(res, "APPLICATION_CREATION_FAILED", "Failed to create application record.", 500, error.message);
+  }
+});
+
+app.get("/api/applications", async (req, res) => {
+  try {
+    const userId = req.query.userId as string;
+    if (userId) {
+      const records = globalApplicationStore.getApplicationsByUser(userId);
+      return sendSuccess(res, records);
+    }
+    const all = globalApplicationStore.getAllApplications();
+    return sendSuccess(res, all);
+  } catch (error: any) {
+    return sendError(res, "APPLICATIONS_QUERY_FAILED", "Failed to retrieve application records.", 500, error.message);
+  }
+});
+
+app.get("/api/applications/:applicationId", async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    const userId = req.query.userId as string | undefined;
+    const record = globalApplicationStore.getApplication(applicationId, userId);
+    if (!record) {
+      return sendError(res, "APPLICATION_NOT_FOUND", "Application not found or unauthorized.", 404);
+    }
+    const events = globalApplicationStore.getEvents(applicationId, userId);
+    return sendSuccess(res, { ...record, events });
+  } catch (error: any) {
+    return sendError(res, "APPLICATION_FETCH_FAILED", "Failed to fetch application details.", 500, error.message);
+  }
+});
+
+app.patch("/api/applications/:applicationId", async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    const { userId, outcome, outcomeDate, userNotes, confidence, evidenceSource } = req.body;
+    if (!userId) {
+      return sendError(res, "UNAUTHORIZED", "userId is required for updating application.", 401);
+    }
+    const updated = globalApplicationStore.updateApplication({
+      applicationId,
+      userId,
+      outcome,
+      outcomeDate,
+      userNotes,
+      confidence,
+      evidenceSource
+    });
+    return sendSuccess(res, updated);
+  } catch (error: any) {
+    return sendError(res, "APPLICATION_UPDATE_FAILED", error.message || "Failed to update application.", 500);
+  }
+});
+
+app.post("/api/applications/:applicationId/events", async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    const { userId, newOutcome, eventDate, notes, confidence, evidenceSource } = req.body;
+    if (!userId || !newOutcome) {
+      return sendError(res, "INVALID_INPUT", "userId and newOutcome are required.", 400);
+    }
+    const updated = globalApplicationStore.updateApplication({
+      applicationId,
+      userId,
+      outcome: newOutcome,
+      outcomeDate: eventDate,
+      userNotes: notes,
+      confidence,
+      evidenceSource
+    });
+    const events = globalApplicationStore.getEvents(applicationId, userId);
+    return sendSuccess(res, { application: updated, events });
+  } catch (error: any) {
+    return sendError(res, "EVENT_CREATION_FAILED", error.message || "Failed to add timeline event.", 500);
+  }
+});
+
+app.get("/api/outcome-intelligence", async (_req, res) => {
+  try {
+    const analytics = globalOutcomeIntelligenceEngine.getGlobalAnalytics();
+    return sendSuccess(res, analytics);
+  } catch (error: any) {
+    return sendError(res, "OUTCOME_INTELLIGENCE_FAILED", "Failed to calculate global outcome analytics.", 500, error.message);
+  }
+});
+
+app.get("/api/outcome-intelligence/personal", async (req, res) => {
+  try {
+    const userId = req.query.userId as string;
+    if (!userId) {
+      return sendError(res, "INVALID_INPUT", "userId query parameter is required.", 400);
+    }
+    const analytics = globalOutcomeIntelligenceEngine.getPersonalAnalytics(userId);
+    return sendSuccess(res, analytics);
+  } catch (error: any) {
+    return sendError(res, "PERSONAL_OUTCOME_FAILED", "Failed to calculate personal outcome analytics.", 500, error.message);
+  }
+});
+
+app.get("/api/outcome-intelligence/company/:companyName", async (req, res) => {
+  try {
+    const { companyName } = req.params;
+    const analytics = globalOutcomeIntelligenceEngine.getCompanyAnalytics(companyName);
+    return sendSuccess(res, analytics);
+  } catch (error: any) {
+    return sendError(res, "COMPANY_OUTCOME_FAILED", "Failed to calculate company outcome analytics.", 500, error.message);
+  }
+});
+
+app.get("/api/outcome-intelligence/role/:roleTitle", async (req, res) => {
+  try {
+    const { roleTitle } = req.params;
+    const analytics = globalOutcomeIntelligenceEngine.getRoleAnalytics(roleTitle);
+    return sendSuccess(res, analytics);
+  } catch (error: any) {
+    return sendError(res, "ROLE_OUTCOME_FAILED", "Failed to calculate role outcome analytics.", 500, error.message);
   }
 });
 

@@ -30,12 +30,13 @@ import ResumeList from "./ResumeList";
 import TailorWizard from "./TailorWizard";
 import AnalysisHistory from "./AnalysisHistory";
 import FresherHub from "./FresherHub";
+import ApplicationTracker from "./ApplicationTracker";
 
 interface DashboardProps {
   user: any;
 }
 
-type Tab = "resumes" | "tailor" | "fresher" | "history";
+type Tab = "resumes" | "tailor" | "fresher" | "applications" | "history";
 
 export default function Dashboard({ user }: DashboardProps) {
   // Navigation & UI state
@@ -210,6 +211,22 @@ export default function Dashboard({ user }: DashboardProps) {
               <div className={`w-2 h-2 rounded-full transition-all duration-300 ${activeTab === "fresher" ? "bg-cyan-400 shadow-[0_0_8px_#22d3ee]" : "bg-transparent"}`}></div>
               <GraduationCap className="w-4 h-4" />
               <span>Fresher Hub</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab("applications");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-300 clickable-cursor ${
+                activeTab === "applications"
+                  ? "bg-cyan-500/10 text-cyan-400 border-l-2 border-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.05)]"
+                  : "text-slate-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <div className={`w-2 h-2 rounded-full transition-all duration-300 ${activeTab === "applications" ? "bg-cyan-400 shadow-[0_0_8px_#22d3ee]" : "bg-transparent"}`}></div>
+              <Briefcase className="w-4 h-4" />
+              <span>Applications</span>
             </button>
 
             <button
@@ -463,6 +480,11 @@ service cloud.firestore {
               <FresherHub
                 userId={user.uid}
                 onResumeCreated={() => setActiveTab("resumes")}
+              />
+            ) : activeTab === "applications" ? (
+              <ApplicationTracker
+                userId={user.uid}
+                resumes={resumes}
               />
             ) : (
               <div className="space-y-4 flex-1 flex flex-col">

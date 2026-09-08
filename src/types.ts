@@ -699,3 +699,155 @@ export interface CandidateOutcomeRecord {
   verified: boolean;
   createdAt: string;
 }
+
+// ============================================================================
+// APPLICATION TRACKING & OUTCOME INTELLIGENCE TYPES
+// ============================================================================
+
+export type ApplicationOutcome =
+  | "APPLIED"
+  | "REJECTED"
+  | "RECRUITER_SCREEN"
+  | "INTERVIEW"
+  | "TECHNICAL_INTERVIEW"
+  | "FINAL_ROUND"
+  | "OFFER"
+  | "HIRED"
+  | "WITHDRAWN"
+  | "UNKNOWN";
+
+export type ApplicationSource =
+  | "USER_ENTERED"
+  | "AUTHORIZED_IMPORT"
+  | "LICENSED_DATASET";
+
+export type OutcomeConfidence =
+  | "VERIFIED"
+  | "USER_REPORTED"
+  | "UNVERIFIED";
+
+export type OutcomeEvidenceSource =
+  | "EMAIL"
+  | "RECRUITER_MESSAGE"
+  | "CAREER_PORTAL"
+  | "USER_ENTERED"
+  | "OTHER_AUTHORIZED";
+
+export interface ApplicationScoreSnapshot {
+  atsScore: number;
+  targetMatchScore: number;
+  requiredMatched: number;
+  requiredTotal: number;
+  preferredMatched: number;
+  preferredTotal: number;
+  criticalGapsCount: number;
+  requirementProfileHash: string;
+  intelligenceDatasetVersion?: string;
+  capturedAt: string;
+}
+
+export interface ApplicationRecord {
+  applicationId: string;
+  userId: string;
+  jobId: string;
+  resumeId: string;
+  tailoredResumeId?: string;
+  companyName: string;
+  companyId?: string;
+  roleTitle: string;
+  roleId?: string;
+  appliedAt: string;
+  outcome: ApplicationOutcome;
+  outcomeDate?: string;
+  userNotes?: string;
+  source: ApplicationSource;
+  outcomeConfidence: OutcomeConfidence;
+  outcomeEvidenceSource?: OutcomeEvidenceSource;
+  scoreSnapshot: ApplicationScoreSnapshot;
+  resumeVersionName?: string;
+  isTailored?: boolean;
+  beforeAtsScore?: number;
+  afterAtsScore?: number;
+  beforeTargetMatch?: number;
+  afterTargetMatch?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApplicationEvent {
+  eventId: string;
+  applicationId: string;
+  userId: string;
+  previousOutcome?: ApplicationOutcome;
+  newOutcome: ApplicationOutcome;
+  eventDate: string;
+  notes?: string;
+  confidence: OutcomeConfidence;
+  evidenceSource?: OutcomeEvidenceSource;
+  createdAt: string;
+}
+
+export interface OutcomeDatasetVersion {
+  versionId: string;
+  applicationCount: number;
+  eligibleApplicationCount: number;
+  companyCount: number;
+  roleCount: number;
+  dateRange: {
+    start: string;
+    end: string;
+  };
+  generatedAt: string;
+}
+
+export interface OutcomePattern {
+  patternId: string;
+  companyId?: string;
+  companyName?: string;
+  roleId?: string;
+  roleTitle?: string;
+  roleFamily?: string;
+  sampleSize: number;
+  condition: {
+    metric: string;
+    operator: string;
+    value: number;
+  };
+  outcomeMetric: string;
+  observedValue: number;
+  evidenceLevel: EvidenceStrength;
+  sourceApplicationIds: string[];
+  generatedAt: string;
+  datasetVersion: string;
+}
+
+export interface OutcomeCorrelation {
+  metric: string;
+  threshold: number;
+  highGroupRate: number;
+  lowGroupRate: number;
+  description: string;
+}
+
+export interface OutcomeSummaryAnalytics {
+  datasetVersion: string;
+  sampleSize: number;
+  eligibleCount: number;
+  evidenceLevel: EvidenceStrength;
+  applicationCount: number;
+  recruiterScreenCount: number;
+  recruiterScreenRate: number; // 0 to 100%
+  interviewCount: number;
+  interviewRate: number; // 0 to 100%
+  offerCount: number;
+  offerRate: number; // 0 to 100%
+  hiredCount: number;
+  hiredRate: number; // 0 to 100%
+  rejectedCount: number;
+  rejectedRate: number; // 0 to 100%
+  withdrawnCount: number;
+  unknownCount: number;
+  correlations?: OutcomeCorrelation[];
+  disclaimer: string;
+}
+

@@ -4,7 +4,7 @@ import {
   Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, TrendingDown,
   Compass, Info, Cpu, AlertTriangle, CheckSquare, Lock, 
   RefreshCw, XCircle, ArrowLeft, Printer, FileText, FileSpreadsheet,
-  Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers
+  Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers, Briefcase
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
@@ -29,7 +29,7 @@ export default function TailorWizard({
   const [experienceLevel, setExperienceLevel] = useState("1–2 years");
   const [jobDescription, setJobDescription] = useState("");
 
-  // Stage 6: Universal Job Ingestion state
+  // Universal Job Ingestion state
   const [jobUrl, setJobUrl] = useState("");
   const [isImportingJob, setIsImportingJob] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -64,7 +64,7 @@ export default function TailorWizard({
   const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored" | "intelligence">("checklist");
   const [copiedText, setCopiedText] = useState(false);
 
-  // Stage 7: Market & Role Intelligence states
+  // Market & Role Intelligence states
   const [marketIntelligence, setMarketIntelligence] = useState<any | null>(null);
   const [isLoadingIntelligence, setIsLoadingIntelligence] = useState(false);
   const [intelligenceError, setIntelligenceError] = useState<string | null>(null);
@@ -97,6 +97,58 @@ export default function TailorWizard({
     }
   };
 
+  const [trackedSuccess, setTrackedSuccess] = useState(false);
+
+  const handleTrackApplication = async () => {
+    if (!selectedResume || !targetCompany || !targetRole) return;
+    try {
+      const snapshot = {
+        atsScore: (batchResult as any)?.scoreComparison?.afterAtsScore || gapReport?.atsScore || 0,
+        targetMatchScore: (batchResult as any)?.scoreComparison?.afterTargetMatch || gapReport?.targetMatchScore || 0,
+        requiredMatched: gapReport?.scoreBreakdown?.requiredMatched || 0,
+        requiredTotal: gapReport?.scoreBreakdown?.requiredTotal || 0,
+        preferredMatched: gapReport?.scoreBreakdown?.preferredMatched || 0,
+        preferredTotal: gapReport?.scoreBreakdown?.preferredTotal || 0,
+        criticalGapsCount: gapReport?.scoreBreakdown?.criticalGapsCount || 0,
+        requirementProfileHash: frozenProfile?.profileHash || frozenProfile?.id || "hash_draft",
+        intelligenceDatasetVersion: frozenProfile?.datasetVersion || "v1",
+        capturedAt: new Date().toISOString()
+      };
+
+      const res = await fetch("/api/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          jobId: importedJobData?.jobId || `job_${targetCompany.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`,
+          resumeId: selectedResume.id,
+          tailoredResumeId: `tailored_${Date.now()}`,
+          companyName: targetCompany,
+          roleTitle: targetRole,
+          appliedAt: new Date().toISOString(),
+          outcome: "APPLIED",
+          scoreSnapshot: snapshot,
+          resumeVersionName: `Tailored - ${selectedResume.name || selectedResume.fileName || "Resume"}`,
+          isTailored: true,
+          beforeAtsScore: (batchResult as any)?.scoreComparison?.beforeAtsScore,
+          afterAtsScore: (batchResult as any)?.scoreComparison?.afterAtsScore,
+          beforeTargetMatch: (batchResult as any)?.scoreComparison?.beforeTargetMatch,
+          afterTargetMatch: (batchResult as any)?.scoreComparison?.afterTargetMatch
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTrackedSuccess(true);
+        setTimeout(() => setTrackedSuccess(false), 4000);
+      } else {
+        alert(data.error?.message || "Could not track application.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Network error tracking application.");
+    }
+  };
+
   // Cross-Resume State Isolation (Part 26 - Resume Version Integrity)
   React.useEffect(() => {
     setStep("SETUP");
@@ -109,6 +161,7 @@ export default function TailorWizard({
     setTailorRecommendation(null);
     setMarketIntelligence(null);
     setIntelligenceError(null);
+    setTrackedSuccess(false);
     setErrorDetails({ title: "", message: "" });
   }, [selectedResume?.id]);
 
@@ -219,7 +272,7 @@ export default function TailorWizard({
     const gapData: GapReport = gapJson.data;
     setGapReport(gapData);
 
-    // Stage 7: Fetch Market & Role Intelligence patterns
+    // Fetch Market & Role Intelligence patterns
     const candidateSkills = parsed?.skills?.map((s) => s.name) || [];
     fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
 
@@ -353,7 +406,7 @@ export default function TailorWizard({
     setExportError(null);
     const content = batchResult?.tailoredContent || selectedResume?.content || "";
     
-    // Stage 5: Strict Validation Gate
+    // Strict Export Readiness Validation Gate
     const validation = validateExportReadiness({
       status: batchResult ? "FINAL_OPTIMIZED" : "DRAFT",
       tailoredContent: content,
@@ -889,6 +942,24 @@ export default function TailorWizard({
                     </>
                   )}
                 </button>
+
+                <button 
+                  onClick={handleTrackApplication}
+                  className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
+                  title="Record this tailored submission in Application Tracker"
+                >
+                  {trackedSuccess ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-emerald-400">Tracked</span>
+                    </>
+                  ) : (
+                    <>
+                      <Briefcase className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Track Application</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
 
@@ -947,7 +1018,7 @@ export default function TailorWizard({
         )}
 
         {dashboardTab === "intelligence" && (
-          /* STAGE 7: UNIVERSAL MARKET & ROLE INTELLIGENCE VIEW */
+          /* UNIVERSAL MARKET & ROLE INTELLIGENCE VIEW */
           <div className="space-y-6">
             {/* INTEL HEADER */}
             <div className="bg-white/80 backdrop-blur-md border border-slate-200 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -1073,7 +1144,7 @@ export default function TailorWizard({
                     <ShieldAlert className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                     <div>
                       <strong className="text-slate-800 block">Limited Initial Sample Size ({marketIntelligence.totalPostingsAnalyzed} Postings)</strong>
-                      Import more public job posting URLs for {targetCompany || "this role"} in the Setup tab using Stage 6 Job Ingestion to deepen the statistical profile.
+                      Import more public job posting URLs for {targetCompany || "this role"} in the Setup tab using Job URL Ingestion to deepen the statistical profile.
                     </div>
                   </div>
                 )}
@@ -1279,7 +1350,7 @@ export default function TailorWizard({
       </div>
 
       <form onSubmit={startPipeline} className="space-y-5 bg-white/70 backdrop-blur-md p-6 border border-slate-200 rounded-3xl shadow-sm">
-        {/* STAGE 6: UNIVERSAL JOB URL INGESTION BOX */}
+        {/* UNIVERSAL JOB URL INGESTION BOX */}
         <div className="p-4 bg-cyan-50/50 border border-cyan-200/80 rounded-2xl space-y-3">
           <div className="flex justify-between items-center">
             <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wider">
