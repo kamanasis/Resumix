@@ -173,7 +173,7 @@ export default function ApplicationTracker({ userId, resumes }: ApplicationTrack
           userNotes: newNotes.trim(),
           outcome: "APPLIED",
           scoreSnapshot: snapshot,
-          resumeVersionName: chosenResume.fileName || "Primary Resume"
+          resumeVersionName: chosenResume.name || "Primary Resume"
         })
       });
 
@@ -671,7 +671,7 @@ export default function ApplicationTracker({ userId, resumes }: ApplicationTrack
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-cyan-400 font-medium"
                     >
                       {resumes.map(r => (
-                        <option key={r.id} value={r.id}>{r.fileName}</option>
+                        <option key={r.id} value={r.id}>{r.name}</option>
                       ))}
                     </select>
                   </div>

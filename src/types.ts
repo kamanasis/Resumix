@@ -539,15 +539,18 @@ export type EvidenceStrength =
 
 export type EvidenceClaimType =
   | "JOB_FREQUENCY"
+  | "OBSERVED_POSTING_FREQUENCY"
   | "ROLE_PATTERN"
   | "TREND"
   | "CO_OCCURRENCE"
+  | "STATISTICAL_CO_OCCURRENCE"
   | "USER_PROVIDED"
   | "OUTCOME_DATA";
 
 export type ClaimConfidenceTier =
   | "VERIFIED_FACT"
   | "OBSERVED_PATTERN"
+  | "EMPIRICAL_DATA"
   | "USER_PROVIDED"
   | "INFERENCE"
   | "INSUFFICIENT_DATA";

@@ -66,7 +66,7 @@ export function generatePrintableHtml(
 ): string {
   const docTitle = typeof titleOrParsed === "string" 
     ? titleOrParsed 
-    : (titleOrParsed?.contactInfo?.name || titleOrParsed?.name || "Tailored Resume");
+    : (titleOrParsed?.contactInfo?.name || "Tailored Resume");
 
   const lines = markdown.split("\n");
   const htmlParts: string[] = [];

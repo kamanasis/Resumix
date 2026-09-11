@@ -18,6 +18,36 @@ interface TailorWizardProps {
   onAnalysisCreated: () => void;
 }
 
+function mapFrontendAiError(errorCode?: string, errorMsg?: string): { title: string; message: string } {
+  const code = errorCode || "";
+  const message = errorMsg || "An unexpected error occurred during processing.";
+
+  let title = "Analysis Unavailable";
+  if (code === "AI_CONFIGURATION_ERROR") {
+    title = "AI Service Not Configured";
+  } else if (code === "AI_AUTHENTICATION_ERROR") {
+    title = "AI Authentication Failed";
+  } else if (code === "AI_PERMISSION_ERROR") {
+    title = "AI Permission Denied";
+  } else if (code === "AI_MODEL_UNAVAILABLE") {
+    title = "AI Model Unavailable";
+  } else if (code === "AI_RATE_LIMITED" || code === "AI_QUOTA_EXCEEDED") {
+    title = "AI Rate Limit Exceeded";
+  } else if (code === "AI_TIMEOUT") {
+    title = "AI Request Timeout";
+  } else if (code === "AI_MALFORMED_RESPONSE") {
+    title = "AI Output Malformed";
+  } else if (code === "VALIDATION_ERROR" || code === "FACTUAL_VALIDATION_FAILED") {
+    title = "Factual Validation Rejected";
+  } else if (code === "MISSING_REQUIRED_DATA" || code === "INVALID_PROFILE_HASH") {
+    title = "Incomplete Analysis Context";
+  } else if (code === "AI_PROVIDER_ERROR") {
+    title = "AI Service Error";
+  }
+
+  return { title, message };
+}
+
 export default function TailorWizard({
   userId,
   selectedResume,
@@ -52,10 +82,19 @@ export default function TailorWizard({
   const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null);
   const [gapReport, setGapReport] = useState<GapReport | null>(null);
   
-  // Single-issue Tailoring UI state
+  // Single-issue Tailoring UI state (per-item caching, loading, and fail-closed error handling)
   const [activeMissingItem, setActiveMissingItem] = useState<MissingItem | null>(null);
-  const [tailorRecommendation, setTailorRecommendation] = useState<TailorRecommendation | null>(null);
-  const [isTailoring, setIsTailoring] = useState(false);
+  const [tailorRecommendations, setTailorRecommendations] = useState<Record<string, TailorRecommendation>>({});
+  const [loadingGapItemTitle, setLoadingGapItemTitle] = useState<string | null>(null);
+  const [gapErrorItemTitle, setGapErrorItemTitle] = useState<string | null>(null);
+  const [gapErrorDetails, setGapErrorDetails] = useState<{ title: string; message: string; code?: string } | null>(null);
+
+  const getGapItemKey = (item: MissingItem) => {
+    const itemIdentifier = item.id || item.title;
+    const resId = selectedResume?.id || "default_res";
+    const profileHash = frozenProfile?.profileHash || frozenProfile?.id || "default_prof";
+    return `${resId}:::${profileHash}:::${itemIdentifier}`;
+  };
 
   // Checkboxes & Batch Tailoring states
   const [selectedItems, setSelectedItems] = useState<MissingItem[]>([]);
@@ -63,6 +102,40 @@ export default function TailorWizard({
   const [isBatchTailoring, setIsBatchTailoring] = useState(false);
   const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored" | "intelligence">("checklist");
   const [copiedText, setCopiedText] = useState(false);
+
+  // Dynamic Gemini Key Configuration State
+  const [newApiKey, setNewApiKey] = useState("");
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [keyConfigError, setKeyConfigError] = useState<string | null>(null);
+  const [keyConfigSuccess, setKeyConfigSuccess] = useState<string | null>(null);
+
+  const handleSaveApiKey = async () => {
+    if (!newApiKey.trim()) return;
+    setIsSavingKey(true);
+    setKeyConfigError(null);
+    setKeyConfigSuccess(null);
+    try {
+      const res = await fetch("/api/configure-gemini-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: newApiKey.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setKeyConfigError(data.error?.message || "Failed to verify API key with Google AI.");
+        return;
+      }
+      setKeyConfigSuccess("Gemini API key verified and connected successfully! Retrying analysis...");
+      setNewApiKey("");
+      setTimeout(() => {
+        startPipeline();
+      }, 1000);
+    } catch (err: any) {
+      setKeyConfigError(err.message || "Failed to connect to server.");
+    } finally {
+      setIsSavingKey(false);
+    }
+  };
 
   // Market & Role Intelligence states
   const [marketIntelligence, setMarketIntelligence] = useState<any | null>(null);
@@ -128,7 +201,7 @@ export default function TailorWizard({
           appliedAt: new Date().toISOString(),
           outcome: "APPLIED",
           scoreSnapshot: snapshot,
-          resumeVersionName: `Tailored - ${selectedResume.name || selectedResume.fileName || "Resume"}`,
+          resumeVersionName: `Tailored - ${selectedResume.name || "Resume"}`,
           isTailored: true,
           beforeAtsScore: (batchResult as any)?.scoreComparison?.beforeAtsScore,
           afterAtsScore: (batchResult as any)?.scoreComparison?.afterAtsScore,
@@ -158,7 +231,10 @@ export default function TailorWizard({
     setSelectedItems([]);
     setBatchResult(null);
     setActiveMissingItem(null);
-    setTailorRecommendation(null);
+    setTailorRecommendations({});
+    setLoadingGapItemTitle(null);
+    setGapErrorItemTitle(null);
+    setGapErrorDetails(null);
     setMarketIntelligence(null);
     setIntelligenceError(null);
     setTrackedSuccess(false);
@@ -215,7 +291,13 @@ export default function TailorWizard({
       
       const profileJson = await profileRes.json();
       if (!profileRes.ok || !profileJson.success || !profileJson.data) {
-        throw new Error(profileJson.error?.message || "Requirement engine failed to extract verified requirements.");
+        const errorInfo = mapFrontendAiError(
+          profileJson.error?.code,
+          profileJson.error?.message || "Requirement engine failed to extract verified requirements."
+        );
+        setErrorDetails(errorInfo);
+        setStep("ERROR");
+        return;
       }
       const profileData: RequirementProfile = profileJson.data;
       if (importedJobData) {
@@ -234,7 +316,13 @@ export default function TailorWizard({
 
       const parseJson = await parseRes.json();
       if (!parseRes.ok || !parseJson.success || !parseJson.data) {
-        throw new Error(parseJson.error?.message || "Resume parser failed to extract structured entities.");
+        const errorInfo = mapFrontendAiError(
+          parseJson.error?.code,
+          parseJson.error?.message || "Resume parser failed to extract structured entities."
+        );
+        setErrorDetails(errorInfo);
+        setStep("ERROR");
+        return;
       }
       const parsedData: ParsedResume = parseJson.data;
       setParsedResume(parsedData);
@@ -267,13 +355,19 @@ export default function TailorWizard({
 
     const gapJson = await gapRes.json();
     if (!gapRes.ok || !gapJson.success || !gapJson.data) {
-      throw new Error(gapJson.error?.message || "Gap analysis engine failed to calculate verified matches.");
+      const errorInfo = mapFrontendAiError(
+        gapJson.error?.code,
+        gapJson.error?.message || "Gap analysis engine failed to calculate verified matches."
+      );
+      setErrorDetails(errorInfo);
+      setStep("ERROR");
+      return;
     }
     const gapData: GapReport = gapJson.data;
     setGapReport(gapData);
 
     // Fetch Market & Role Intelligence patterns
-    const candidateSkills = parsed?.skills?.map((s) => s.name) || [];
+    const candidateSkills = parsed?.skills || [];
     fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
 
     // Save only verified real gap reports to Firestore
@@ -302,30 +396,89 @@ export default function TailorWizard({
   };
 
   const handleFixItem = async (item: MissingItem) => {
+    const itemKey = getGapItemKey(item);
+
     setActiveMissingItem(item);
-    setIsTailoring(true);
-    setTailorRecommendation(null);
+    setGapErrorItemTitle(null);
+    setGapErrorDetails(null);
+
+    // 1. Return cached recommendation if already fetched for this exact resume + profile + requirement
+    if (tailorRecommendations[itemKey]) {
+      return;
+    }
+
+    // 2. Prevent duplicate concurrent requests for the same item
+    if (loadingGapItemTitle === item.title) {
+      return;
+    }
+
+    setLoadingGapItemTitle(item.title);
+
+    // 3. Timeout Protection: 15-second AbortController to prevent infinite hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 15000);
 
     try {
       const res = await fetch("/api/tailor-gap", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          resumeText: selectedResume?.content,
+          resumeId: selectedResume?.id,
+          resumeText: selectedResume?.content || "",
+          profileHash: frozenProfile?.profileHash || frozenProfile?.id,
+          requirementId: item.id,
+          targetCompany,
+          targetRole,
+          experienceLevel,
+          jobDescription,
           frozenProfile,
           missingItem: item
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
+
       const data = await res.json();
       if (!res.ok || !data.success || !data.data) {
-        throw new Error(data.error?.message || "Failed to generate single fix recommendation.");
+        const mappedErr = mapFrontendAiError(
+          data.error?.code,
+          data.error?.message || "Failed to generate single fix recommendation."
+        );
+        setGapErrorItemTitle(item.title);
+        setGapErrorDetails({
+          title: mappedErr.title,
+          message: mappedErr.message,
+          code: data.error?.code
+        });
+        return;
       }
-      setTailorRecommendation(data.data);
+
+      setTailorRecommendations(prev => ({
+        ...prev,
+        [itemKey]: data.data
+      }));
     } catch (err: any) {
-      console.error(err);
-      setActiveMissingItem(null);
+      clearTimeout(timeoutId);
+      console.error("Single fix explanation error:", err);
+
+      let title = "Unable to Generate Explanation";
+      let message = err.message || "Failed to generate an evidence-based explanation.";
+
+      if (err.name === "AbortError") {
+        title = "Request Timeout";
+        message = "Suggestion generation timed out. Please retry.";
+      } else if (err.message && err.message.includes("Failed to fetch")) {
+        title = "Network Failure";
+        message = "Network request failed. Please check your connection and retry.";
+      }
+
+      setGapErrorItemTitle(item.title);
+      setGapErrorDetails({ title, message });
     } finally {
-      setIsTailoring(false);
+      setLoadingGapItemTitle(null);
     }
   };
 
@@ -354,7 +507,13 @@ export default function TailorWizard({
       });
       const data = await res.json();
       if (!res.ok || !data.success || !data.data) {
-        throw new Error(data.error?.message || "Failed to perform factual resume optimization.");
+        const errorInfo = mapFrontendAiError(
+          data.error?.code,
+          data.error?.message || "Failed to perform factual resume optimization."
+        );
+        setErrorDetails(errorInfo);
+        setStep("ERROR");
+        return;
       }
       setBatchResult(data.data);
       setDashboardTab("tailored");
@@ -391,7 +550,8 @@ export default function TailorWizard({
       setStep("ERROR");
     }
     setActiveMissingItem(null);
-    setTailorRecommendation(null);
+    setGapErrorItemTitle(null);
+    setGapErrorDetails(null);
   };
 
   const [exportError, setExportError] = useState<string | null>(null);
@@ -418,11 +578,11 @@ export default function TailorWizard({
       return;
     }
 
-    const candidateName = parsedResume?.name || "Candidate";
+    const candidateName = parsedResume?.contactInfo?.name || "Candidate";
     const filename = sanitizeExportFileName(candidateName, targetCompany, targetRole, format === "docx" ? "docx" : format === "md" ? "md" : "html");
 
     if (format === "docx") {
-      const docxBlob = generateDocxBlob(content, `${targetRole} - ${candidateName}`);
+      const docxBlob = generateDocxBlob(content, parsedResume || undefined);
       triggerDownload(docxBlob, filename);
     } else if (format === "md") {
       const mdBlob = new Blob([content], { type: "text/markdown;charset=utf-8;" });
@@ -501,6 +661,11 @@ export default function TailorWizard({
 
   // FAIL CLOSED ERROR STATE (Part 3 & 21)
   if (step === "ERROR") {
+    const isAiConfigIssue =
+      errorDetails.title === "AI Permission Denied" ||
+      errorDetails.title === "AI Service Not Configured" ||
+      errorDetails.title === "AI Authentication Failed";
+
     return (
       <div className="py-12 flex flex-col items-center justify-center text-center bg-red-50/70 backdrop-blur-xl border border-red-200 rounded-3xl p-8 shadow-sm animate-fadeIn">
         <div className="w-16 h-16 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mb-4 border border-red-200">
@@ -509,9 +674,67 @@ export default function TailorWizard({
         <h3 className="text-red-900 font-display font-bold text-2xl mb-2">
           {errorDetails.title || "Analysis Unavailable"}
         </h3>
-        <p className="text-red-700 text-sm font-medium mb-6 max-w-lg">
+        <p className="text-red-700 text-sm font-medium mb-4 max-w-lg">
           {errorDetails.message || "Resumix could not complete the analysis because the required service did not return valid verified data."}
         </p>
+
+        {isAiConfigIssue && (
+          <div className="mb-6 w-full max-w-lg bg-white/95 backdrop-blur-md p-5 rounded-2xl border border-red-200 shadow-sm text-left">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                Connect Gemini API Key
+              </span>
+              <a 
+                href="https://aistudio.google.com/app/apikey" 
+                target="_blank" 
+                rel="noreferrer"
+                className="text-cyan-600 hover:text-cyan-700 font-bold text-xs flex items-center gap-1 hover:underline"
+              >
+                Get Free API Key <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+            <p className="text-slate-500 text-xs mb-3">
+              Paste your Gemini API key from Google AI Studio below to test and connect instantly. It will be securely stored server-side.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                placeholder="AIzaSy..."
+                value={newApiKey}
+                onChange={(e) => setNewApiKey(e.target.value)}
+                className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-slate-50 font-mono"
+              />
+              <button
+                type="button"
+                onClick={handleSaveApiKey}
+                disabled={isSavingKey || !newApiKey.trim()}
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl transition-all disabled:opacity-50 flex items-center gap-1.5 shadow-sm shrink-0"
+              >
+                {isSavingKey ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Verifying...
+                  </>
+                ) : (
+                  "Save & Connect"
+                )}
+              </button>
+            </div>
+            {keyConfigError && (
+              <p className="mt-2 text-xs text-red-600 font-medium bg-red-50 p-2 rounded-lg border border-red-100">
+                {keyConfigError}
+              </p>
+            )}
+            {keyConfigSuccess && (
+              <p className="mt-2 text-xs text-green-700 font-medium bg-green-50 p-2 rounded-lg border border-green-100">
+                {keyConfigSuccess}
+              </p>
+            )}
+            <div className="mt-3 pt-3 border-t border-slate-100 text-[11px] text-slate-400">
+              Alternatively, enable the <strong>Generative Language API</strong> in Google Cloud Console for project <code className="bg-slate-100 px-1 py-0.5 rounded text-slate-600">gemini-reumixxxx</code>.
+            </div>
+          </div>
+        )}
+
         <div className="flex gap-3">
           <button 
             onClick={() => startPipeline()}
@@ -756,13 +979,22 @@ export default function TailorWizard({
                           {activeMissingItem?.title !== item.title ? (
                             <button 
                               onClick={() => handleFixItem(item)}
-                              className="text-xs font-bold text-cyan-600 hover:text-cyan-700 flex items-center gap-1"
+                              disabled={loadingGapItemTitle === item.title}
+                              className={`text-xs font-bold flex items-center gap-1 transition-all ${
+                                loadingGapItemTitle === item.title 
+                                  ? 'text-slate-400 cursor-not-allowed'
+                                  : 'text-cyan-600 hover:text-cyan-700'
+                              }`}
                             >
                               <Info className="w-3.5 h-3.5" /> Explain single fix
                             </button>
                           ) : (
                             <button 
-                              onClick={() => setActiveMissingItem(null)}
+                              onClick={() => {
+                                setActiveMissingItem(null);
+                                setGapErrorItemTitle(null);
+                                setGapErrorDetails(null);
+                              }}
                               className="text-xs font-bold text-slate-500 hover:text-slate-600"
                             >
                               Hide explanation
@@ -779,21 +1011,49 @@ export default function TailorWizard({
                               exit={{ opacity: 0, height: 0 }}
                               className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-4 overflow-hidden"
                             >
-                              {isTailoring ? (
-                                <div className="flex items-center gap-3 text-cyan-600 text-sm font-bold">
+                              {loadingGapItemTitle === item.title ? (
+                                <div className="flex items-center gap-3 text-cyan-600 text-sm font-bold py-2">
                                   <RefreshCw className="w-4 h-4 animate-spin" /> Formulating truthful suggestion...
                                 </div>
-                              ) : tailorRecommendation ? (
+                              ) : gapErrorItemTitle === item.title && gapErrorDetails ? (
+                                <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-800 space-y-2">
+                                  <div className="flex items-center gap-2 font-bold text-red-700">
+                                    <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                                    <span>{gapErrorDetails.title}</span>
+                                  </div>
+                                  <p className="text-red-700 font-medium">{gapErrorDetails.message}</p>
+                                  <div className="flex gap-2 pt-1">
+                                    <button 
+                                      onClick={() => handleFixItem(item)}
+                                      className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-all text-xs flex items-center gap-1.5 shadow-sm"
+                                    >
+                                      <RefreshCw className="w-3 h-3" /> Retry
+                                    </button>
+                                    <button 
+                                      onClick={() => {
+                                        setActiveMissingItem(null);
+                                        setGapErrorItemTitle(null);
+                                        setGapErrorDetails(null);
+                                      }}
+                                      className="px-3.5 py-1.5 bg-white border border-slate-300 text-slate-700 font-bold rounded-lg hover:bg-slate-50 transition-all text-xs font-semibold"
+                                    >
+                                      Close
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : tailorRecommendations[getGapItemKey(item)] ? (
                                 <div className="space-y-3">
                                   <div className="flex justify-between items-start">
                                     <div>
                                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Target Section</span>
-                                      <span className="text-xs font-bold text-slate-800 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">{tailorRecommendation.section}</span>
+                                      <span className="text-xs font-bold text-slate-800 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
+                                        {tailorRecommendations[getGapItemKey(item)].section}
+                                      </span>
                                     </div>
                                     <div>
                                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Status</span>
                                       <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-amber-100 text-amber-800">
-                                        {tailorRecommendation.evidenceStatus}
+                                        {tailorRecommendations[getGapItemKey(item)].evidenceStatus}
                                       </span>
                                     </div>
                                   </div>
@@ -801,9 +1061,15 @@ export default function TailorWizard({
                                   <div>
                                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Suggested Phrasing / Project Idea</span>
                                     <div className="bg-white border border-cyan-200 p-3 rounded-lg text-xs text-slate-700 italic border-l-4 border-l-cyan-500">
-                                      "{tailorRecommendation.suggestedSentence}"
+                                      "{tailorRecommendations[getGapItemKey(item)].suggestedSentence}"
                                     </div>
                                   </div>
+
+                                  {tailorRecommendations[getGapItemKey(item)].reason && (
+                                    <p className="text-xs text-slate-600 font-medium">
+                                      {tailorRecommendations[getGapItemKey(item)].reason}
+                                    </p>
+                                  )}
                                   
                                   <div className="pt-2 flex gap-3">
                                     <button onClick={() => handleMarkResolved(item)} className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
@@ -908,7 +1174,7 @@ export default function TailorWizard({
 
               <div className="flex items-center gap-2">
                 <button 
-                  onClick={handleExportPdf}
+                  onClick={() => handleExport("pdf")}
                   className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
                   title="Print / Save as clean ATS PDF"
                 >
@@ -917,7 +1183,7 @@ export default function TailorWizard({
                 </button>
 
                 <button 
-                  onClick={handleExportDocx}
+                  onClick={() => handleExport("docx")}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
                   title="Export native Microsoft Word document"
                 >
@@ -926,7 +1192,7 @@ export default function TailorWizard({
                 </button>
 
                 <button 
-                  onClick={handleCopyDraft}
+                  onClick={() => copyToClipboard(batchResult?.tailoredContent || selectedResume?.content || "")}
                   className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
                   title="Copy full text to clipboard"
                 >

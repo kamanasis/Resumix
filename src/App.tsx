@@ -5,7 +5,6 @@ import { doc, getDocFromServer } from "firebase/firestore";
 // Main App component containing Auth gate and Dashboard. Triggering a fresh build to resolve any cached assets issues.
 import AuthPage from "./components/AuthPage";
 import Dashboard from "./components/Dashboard";
-import Cursor3D from "./components/Cursor3D";
 import { Sparkles } from "lucide-react";
 
 export default function App() {
@@ -56,9 +55,6 @@ export default function App() {
 
   return (
     <>
-      {/* 3D Glowing Cursor and Trailing Ring */}
-      <Cursor3D />
-
       {/* Auth state gate */}
       {!user ? (
         <AuthPage />

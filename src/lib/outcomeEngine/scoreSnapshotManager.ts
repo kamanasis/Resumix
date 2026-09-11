@@ -39,7 +39,7 @@ export function captureScoreSnapshot(params: {
     preferredTotal,
     criticalGapsCount,
     requirementProfileHash,
-    intelligenceDatasetVersion: datasetVersion || profile?.datasetVersion || "v1-standard",
+    intelligenceDatasetVersion: datasetVersion || (profile as any)?.datasetVersion || "v1-standard",
     capturedAt: new Date().toISOString()
   };
 }

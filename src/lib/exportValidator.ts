@@ -140,7 +140,7 @@ export function verifyExportContentIntegrity(
   }
 
   // 1. Candidate Name
-  const candidateName = originalParsed.contactInfo?.name || originalParsed.name;
+  const candidateName = originalParsed.contactInfo?.name || (originalParsed as any).name;
   let isNamePreserved = true;
   if (candidateName && candidateName.trim().length > 1) {
     if (!exportedLower.includes(candidateName.toLowerCase().trim())) {
@@ -150,7 +150,7 @@ export function verifyExportContentIntegrity(
   }
 
   // 2. Email & Contact
-  const email = originalParsed.contactInfo?.email || originalParsed.email;
+  const email = originalParsed.contactInfo?.email || (originalParsed as any).email;
   let isContactPreserved = true;
   if (email && email.trim().length > 3) {
     if (!exportedLower.includes(email.toLowerCase().trim())) {

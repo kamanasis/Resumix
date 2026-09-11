@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
 import {
@@ -15,7 +16,8 @@ import {
 } from "./src/lib/atsEngine";
 import {
   validateTailoredResume,
-  ValidationResult
+  ValidationResult,
+  extractNumericMetrics
 } from "./src/lib/tailoringValidator";
 import {
   compareScores,
@@ -47,6 +49,11 @@ const PORT = 3000;
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
+// Serve favicon to prevent 404 console errors
+app.get("/favicon.ico", (req, res) => {
+  res.sendFile(path.join(process.cwd(), "public", "favicon.svg"));
+});
+
 // Standard API Response Envelope Helpers
 function sendSuccess(res: express.Response, data: any, status = 200) {
   return res.status(status).json({ success: true, data });
@@ -63,18 +70,298 @@ function sendError(res: express.Response, code: string, message: string, status 
   });
 }
 
-// Lazy init for Google Gen AI to prevent crash if key is missing on startup
-let aiClient: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI {
-  if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error("GEMINI_API_KEY environment variable is required");
+// Canonical Gemini Model configuration (overridable via process.env.GEMINI_MODEL)
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+export interface ClassifiedAiError {
+  httpStatus: number;
+  code:
+    | "AI_CONFIGURATION_ERROR"
+    | "AI_AUTHENTICATION_ERROR"
+    | "AI_PERMISSION_ERROR"
+    | "AI_MODEL_UNAVAILABLE"
+    | "AI_RATE_LIMITED"
+    | "AI_TIMEOUT"
+    | "AI_MALFORMED_RESPONSE"
+    | "AI_PROVIDER_ERROR";
+  message: string;
+}
+
+/**
+ * Inspects a raw error from the Google GenAI SDK and returns a structured
+ * { httpStatus, code, message } representing the actual failure reason.
+ *
+ * Mapped provider error conditions:
+ *   AI_CONFIGURATION_ERROR   (503) — GEMINI_API_KEY is missing from environment.
+ *   AI_AUTHENTICATION_ERROR  (401) — Key is invalid, revoked, or unauthenticated.
+ *   AI_PERMISSION_ERROR      (403) — Key exists but Generative Language API is blocked or disabled.
+ *   AI_RATE_LIMITED          (429) — Quota exhausted or rate limit hit.
+ *   AI_MODEL_UNAVAILABLE     (503) — Requested model not found or deprecated.
+ *   AI_TIMEOUT               (504) — Request exceeded deadline or timed out.
+ *   AI_PROVIDER_ERROR        (502) — Generic upstream API or argument error.
+ *
+ * Never exposes the raw API key or internal stack trace to callers.
+ */
+export function classifyAiError(error: any): ClassifiedAiError {
+  if (!process.env.GEMINI_API_KEY || !process.env.GEMINI_API_KEY.trim() || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
+    return {
+      httpStatus: 503,
+      code: "AI_CONFIGURATION_ERROR",
+      message: "GEMINI_API_KEY is not configured on the server. Please add a valid Gemini API key from Google AI Studio (https://aistudio.google.com/app/apikey) to .env.local and restart the server."
+    };
+  }
+
+  const raw = error?.message || String(error);
+
+  let providerStatus: number | undefined;
+  let providerReason: string | undefined;
+  let providerMsg: string | undefined;
+  try {
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart !== -1) {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      providerStatus = parsed?.error?.code;
+      providerReason = parsed?.error?.details?.[0]?.reason || parsed?.error?.status;
+      providerMsg = parsed?.error?.message;
     }
+  } catch {
+    providerStatus = error?.status;
+  }
+
+  const status = providerStatus ?? error?.status;
+  const combined = `${raw} ${providerReason || ""} ${providerMsg || ""}`.toLowerCase();
+
+  // 1. Timeout / Deadline exceeded (504)
+  if (
+    status === 504 ||
+    combined.includes("timeout") ||
+    combined.includes("deadline_exceeded") ||
+    combined.includes("etimedout") ||
+    error?.code === "ETIMEDOUT"
+  ) {
+    return {
+      httpStatus: 504,
+      code: "AI_TIMEOUT",
+      message: "The AI service request timed out. Please try again."
+    };
+  }
+
+  // 2. Permission Denied / Service Blocked (403)
+  if (
+    status === 403 ||
+    combined.includes("403") ||
+    combined.includes("permission_denied") ||
+    combined.includes("api_key_service_blocked") ||
+    combined.includes("blocked")
+  ) {
+    const isServiceBlocked = combined.includes("api_key_service_blocked") || combined.includes("blocked");
+    return {
+      httpStatus: 403,
+      code: "AI_PERMISSION_ERROR",
+      message: isServiceBlocked
+        ? "The configured Gemini API key does not have access to the Generative Language API. " +
+          "Enable the 'Generative Language API' in the Google Cloud Console for your project, " +
+          "or replace GEMINI_API_KEY in .env.local with a valid Gemini API key obtained from " +
+          "https://aistudio.google.com/app/apikey"
+        : "The AI provider refused the request due to a permissions error. Verify your GEMINI_API_KEY."
+    };
+  }
+
+  // 3. Authentication error (401 / Invalid Key)
+  if (
+    status === 401 ||
+    combined.includes("401") ||
+    combined.includes("unauthenticated") ||
+    combined.includes("api_key_invalid") ||
+    combined.includes("invalid api key") ||
+    combined.includes("key not valid")
+  ) {
+    return {
+      httpStatus: 401,
+      code: "AI_AUTHENTICATION_ERROR",
+      message: "Authentication failed. The configured GEMINI_API_KEY is invalid, revoked, or expired. Obtain a new key from Google AI Studio and update .env.local."
+    };
+  }
+
+  // 4. Rate limited / Quota exhausted (429)
+  if (
+    status === 429 ||
+    combined.includes("429") ||
+    combined.includes("resource_exhausted") ||
+    combined.includes("quota") ||
+    combined.includes("rate limit")
+  ) {
+    return {
+      httpStatus: 429,
+      code: "AI_RATE_LIMITED",
+      message: "The Gemini API rate limit or quota has been exceeded. Please wait a moment and try again, or check your Google AI Studio quota."
+    };
+  }
+
+  // 5. Model unavailable / deprecated (503)
+  if (
+    status === 404 ||
+    combined.includes("not_found") ||
+    combined.includes("model not found") ||
+    combined.includes("is not found") ||
+    combined.includes("not supported for this model")
+  ) {
+    return {
+      httpStatus: 503,
+      code: "AI_MODEL_UNAVAILABLE",
+      message: `The configured Gemini model (${GEMINI_MODEL}) is unavailable or deprecated. Verify the model configuration in server.ts.`
+    };
+  }
+
+  // 6. Malformed AI response (502)
+  if (
+    combined.includes("ai_malformed_response") ||
+    combined.includes("malformed") ||
+    combined.includes("unexpected token") ||
+    combined.includes("unterminated string") ||
+    combined.includes("is not valid json") ||
+    error instanceof SyntaxError
+  ) {
+    return {
+      httpStatus: 502,
+      code: "AI_MALFORMED_RESPONSE",
+      message: "The AI service returned an incomplete or unparseable response format. Please retry."
+    };
+  }
+
+  // 7. Invalid argument / request format (502)
+  if (status === 400 || combined.includes("invalid_argument")) {
+    return {
+      httpStatus: 502,
+      code: "AI_PROVIDER_ERROR",
+      message: "The AI provider rejected the request format. Please check the model request configuration."
+    };
+  }
+
+  // 8. Generic AI Provider Error (502)
+  return {
+    httpStatus: 502,
+    code: "AI_PROVIDER_ERROR",
+    message: "The AI service returned an unexpected error. Please try again."
+  };
+}
+
+// Lazy init for Google Gen AI with key rotation awareness
+let aiClient: GoogleGenAI | null = null;
+let lastApiKey: string | undefined = undefined;
+
+function getAI(): GoogleGenAI {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || !key.trim() || key === "MY_GEMINI_API_KEY") {
+    throw new Error("GEMINI_API_KEY environment variable is required");
+  }
+  if (!aiClient || lastApiKey !== key) {
     aiClient = new GoogleGenAI({ apiKey: key });
+    lastApiKey = key;
   }
   return aiClient;
 }
+
+// Safe Gemini Health Check API Endpoint
+app.get("/api/gemini-health", async (req, res) => {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || !key.trim() || key === "MY_GEMINI_API_KEY") {
+    return sendError(
+      res,
+      "AI_CONFIGURATION_ERROR",
+      "GEMINI_API_KEY is not configured on the server. Please add your key to .env.local and restart the server.",
+      503,
+      { configured: false }
+    );
+  }
+
+  try {
+    const ai = getAI();
+    // Harmless minimal probe without resume information
+    await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: "ping"
+    });
+
+    return sendSuccess(res, {
+      status: "healthy",
+      configured: true,
+      model: GEMINI_MODEL,
+      reachable: true
+    });
+  } catch (error: any) {
+    console.error("Gemini health check probe failed:", error?.message || error);
+    const classified = classifyAiError(error);
+    return sendError(
+      res,
+      classified.code,
+      classified.message,
+      classified.httpStatus,
+      {
+        configured: true,
+        model: GEMINI_MODEL,
+        reachable: false
+      }
+    );
+  }
+});
+
+// Safe server-side endpoint to configure GEMINI_API_KEY dynamically
+app.post("/api/configure-gemini-key", async (req, res) => {
+  const { apiKey } = req.body;
+  if (!apiKey || typeof apiKey !== "string" || apiKey.trim().length < 20) {
+    return sendError(res, "INVALID_API_KEY", "Please provide a valid Gemini API key from Google AI Studio.", 400);
+  }
+
+  const trimmedKey = apiKey.trim();
+
+  // Test the key against Gemini first
+  try {
+    const testClient = new GoogleGenAI({ apiKey: trimmedKey });
+    await testClient.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: "ping"
+    });
+  } catch (err: any) {
+    console.error("API key validation probe failed:", err?.message || err);
+    const classified = classifyAiError(err);
+    return sendError(
+      res,
+      classified.code,
+      `Key verification failed: ${classified.message}`,
+      classified.httpStatus
+    );
+  }
+
+  // Key is verified working! Update process.env and aiClient
+  process.env.GEMINI_API_KEY = trimmedKey;
+  aiClient = new GoogleGenAI({ apiKey: trimmedKey });
+  lastApiKey = trimmedKey;
+
+  // Persist to .env.local safely
+  try {
+    const envPath = path.join(process.cwd(), ".env.local");
+    let envContent = "";
+    if (fs.existsSync(envPath)) {
+      envContent = fs.readFileSync(envPath, "utf8");
+    }
+
+    if (/^GEMINI_API_KEY=.*$/m.test(envContent)) {
+      envContent = envContent.replace(/^GEMINI_API_KEY=.*$/m, `GEMINI_API_KEY="${trimmedKey}"`);
+    } else {
+      envContent = `GEMINI_API_KEY="${trimmedKey}"\n` + envContent;
+    }
+
+    fs.writeFileSync(envPath, envContent, "utf8");
+  } catch (fsErr) {
+    console.error("Failed to write to .env.local:", fsErr);
+  }
+
+  return sendSuccess(res, {
+    message: "Gemini API key configured and verified successfully!",
+    model: GEMINI_MODEL
+  });
+});
 
 // ============================================================================
 // STRICT OUTPUT VALIDATORS (Part 18 - Strict AI Output Validation)
@@ -182,6 +469,40 @@ function validateTailorGap(data: any): boolean {
   if (typeof data.atsImpact !== "string") return false;
   if (typeof data.confidence !== "number" || isNaN(data.confidence) || data.confidence < 0 || data.confidence > 100) return false;
   return true;
+}
+
+export function extractJsonFromAiResponse(rawText: string): any {
+  if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
+    throw new Error("EMPTY_AI_RESPONSE");
+  }
+
+  const trimmed = rawText.trim();
+
+  // 1. Direct JSON parse
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+
+  // 2. Strip Markdown code block ```json ... ``` or ``` ... ```
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)\s*```/i;
+  const fenceMatch = trimmed.match(fenceRegex);
+  if (fenceMatch && fenceMatch[1]) {
+    try {
+      return JSON.parse(fenceMatch[1].trim());
+    } catch {}
+  }
+
+  // 3. Find outermost matching braces { ... }
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = trimmed.substring(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+  }
+
+  throw new Error("AI_MALFORMED_RESPONSE");
 }
 
 function validateTailorBatch(data: any): boolean {
@@ -354,7 +675,7 @@ Your analysis MUST return a structured JSON response matching the exact schema.`
     const prompt = `User's Current Resume:\n${resumeText}\n\nTarget Company: ${targetCompany}\nTarget Role: ${targetRole}\nLevel: ${experienceLevel || "Not Specified"}\nLocation: ${location || "Not Specified"}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: GEMINI_MODEL,
       contents: [
         { role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }
       ],
@@ -400,6 +721,12 @@ ${bulletImps || "No bullet enhancements generated."}
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/tailor-resume:", error);
+    const raw = error?.message || String(error);
+    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
+        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
+      const classified = classifyAiError(error);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
     return sendError(res, "AI_SERVICE_ERROR", "Failed to tailor resume content.", 500, error.message || String(error));
   }
 });
@@ -488,7 +815,7 @@ CRITICAL ANTI-FABRICATION AND DATA INTEGRITY RULES:
     const prompt = `Generate an entry-level roadmap, learning suggestions, and starter resume draft for ${targetCompany} (${targetRole}).`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: GEMINI_MODEL,
       contents: [
         { role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }
       ],
@@ -512,6 +839,12 @@ CRITICAL ANTI-FABRICATION AND DATA INTEGRITY RULES:
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/generate-fresher-template:", error);
+    const raw = error?.message || String(error);
+    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
+        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
+      const classified = classifyAiError(error);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
     return sendError(res, "AI_SERVICE_ERROR", "Failed to generate fresher career guide and resume.", 500, error.message || String(error));
   }
 });
@@ -581,7 +914,7 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: GEMINI_MODEL,
       contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
       config: { responseMimeType: "application/json", responseSchema: schema }
     });
@@ -646,6 +979,13 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/generate-requirement-profile:", error);
+    // Classify AI provider errors (permission, quota, auth) for actionable user messages
+    const raw = error?.message || String(error);
+    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
+        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
+      const classified = classifyAiError(error);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
     return sendError(res, "REQUIREMENT_ENGINE_ERROR", "Failed to generate requirement profile.", 500, error.message || String(error));
   }
 });
@@ -765,7 +1105,7 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: GEMINI_MODEL,
       contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + resumeText }] }],
       config: { responseMimeType: "application/json", responseSchema: schema }
     });
@@ -805,6 +1145,12 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/parse-resume:", error);
+    const raw = error?.message || String(error);
+    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
+        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
+      const classified = classifyAiError(error);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
     return sendError(res, "RESUME_PARSER_ERROR", "Failed to parse resume.", 500, error.message || String(error));
   }
 });
@@ -903,68 +1249,150 @@ app.post("/api/gap-analysis", async (req, res) => {
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/gap-analysis:", error);
+    const raw = error?.message || String(error);
+    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
+        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
+      const classified = classifyAiError(error);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
     return sendError(res, "GAP_ANALYSIS_ERROR", "Failed gap analysis.", 500, error.message || String(error));
   }
 });
 
-// V2 Deterministic Pipeline - Phase 5: Single Item Tailoring
+// Single Item Tailoring & Explanation API Endpoint
 app.post("/api/tailor-gap", async (req, res) => {
   try {
-    const { resumeText, frozenProfile, missingItem } = req.body;
-    if (!resumeText || !frozenProfile || !missingItem) {
-      return sendError(res, "MISSING_REQUIRED_DATA", "Missing resumeText, frozenProfile, or missingItem.", 400);
+    const { 
+      resumeId, 
+      resumeText, 
+      profileHash, 
+      requirementId, 
+      frozenProfile, 
+      missingItem 
+    } = req.body;
+
+    if (!frozenProfile || !missingItem) {
+      return sendError(res, "MISSING_REQUIRED_DATA", "Missing frozenProfile or missingItem in request payload.", 400);
     }
 
-    const ai = getAI();
-    const systemPrompt = `You are a truthful Resume Tailoring Engine.
-Suggest an improvement or phrasing recommendation for ONE missing checklist item.
+    const resolvedProfileHash = profileHash || frozenProfile.profileHash || frozenProfile.id;
+    if (!resolvedProfileHash || typeof resolvedProfileHash !== "string") {
+      return sendError(res, "INVALID_PROFILE_HASH", "Missing or invalid profileHash in analysis context.", 400);
+    }
 
-CRITICAL RULES:
-1. DO NOT INVENT FAKE EMPLOYMENT OR METRICS.
-2. If the user does not have this skill, frame the suggestion truthfully (e.g. as a project, coursework, or pending credential), or state that evidence is needed.
-3. Keep suggestions concise and actionable.`;
+    const resolvedReqId = requirementId || missingItem.id;
+    const itemTitle = missingItem.title || missingItem.name;
+    if (!itemTitle || typeof itemTitle !== "string" || !itemTitle.trim()) {
+      return sendError(res, "INVALID_REQUIREMENT", "Missing requirement title in request payload.", 400);
+    }
+
+    // Resolve authoritative requirement from frozenProfile structuredRequirements if present
+    let matchedReq: TargetRequirement | undefined;
+    if (Array.isArray(frozenProfile.structuredRequirements) && frozenProfile.structuredRequirements.length > 0) {
+      matchedReq = frozenProfile.structuredRequirements.find((r: any) => 
+        r.requirementId === resolvedReqId ||
+        (r.name && r.name.toLowerCase() === itemTitle.toLowerCase()) ||
+        (r.canonicalName && r.canonicalName.toLowerCase() === normalizeTechnologyName(itemTitle).toLowerCase())
+      );
+    }
+
+    // Preserve exact source evidence
+    const sourceQuote = matchedReq?.sourceQuote || missingItem.sourceQuote || missingItem.reason;
+    const category = matchedReq?.category || missingItem.category || "TECHNICAL_SKILL";
+    const importance = matchedReq?.importance || missingItem.importance || "REQUIRED";
+
+    const safeResumeText = typeof resumeText === "string" ? resumeText : "";
+    const hasCandidateEvidence = safeResumeText.toLowerCase().includes(itemTitle.toLowerCase());
+
+    const ai = getAI();
+    const systemPrompt = `You are a strict, truthful ATS Recruitment Advisor and Technical Skill Analyst.
+TASK: Formulate a truthful, actionable explanation and guidance for ONE target checklist item.
+
+TARGET ROLE CONTEXT:
+- Role: "${frozenProfile.targetRole || "Target Role"}"
+- Company: "${frozenProfile.targetCompany || "Target Company"}"
+
+TARGET REQUIREMENT:
+- Title: "${itemTitle}" (${category} / ${importance})
+- Source Evidence: "${sourceQuote || "Required by target job profile"}"
+
+CANDIDATE EVIDENCE STATUS:
+${hasCandidateEvidence 
+  ? `The candidate resume contains text matching "${itemTitle}". Focus on how to clarify, quantify, or rephrase existing evidence.`
+  : `The candidate resume has NO verified evidence for "${itemTitle}". DO NOT claim they have experience. Frame guidance as study roadmap, relevant practice project, or required confirmation before adding.`}
+
+CRITICAL ANTI-FABRICATION RULES:
+1. TRUTHFULNESS: Never claim candidate has mastered "${itemTitle}" if evidence is missing.
+2. NO FAKE METRICS: Do not invent quantitative metrics (e.g. "improved by 40%", "$500k", "team of 10").
+3. NO FAKE EMPLOYERS: Do not invent employment history or companies.
+4. EVIDENCE STATUS:
+   - If missing from resume: set evidenceStatus strictly to: "No verified evidence in resume — confirmation required before adding"
+   - If present in resume: set evidenceStatus strictly to: "Supported by existing resume text"`;
 
     const schema = {
       type: Type.OBJECT,
       properties: {
-        section: { type: Type.STRING, description: "e.g., Skills, Experience, Project, Summary" },
-        suggestedSentence: { type: Type.STRING, description: "A truthful, ATS-friendly bullet or project addition recommendation." },
-        evidenceStatus: { type: Type.STRING, description: "e.g., 'Requires your confirmation before adding' or 'Supported by existing text'" },
-        reason: { type: Type.STRING },
-        atsImpact: { type: Type.STRING },
-        confidence: { type: Type.INTEGER }
+        section: { type: Type.STRING, description: "Relevant resume section (e.g. Skills, Projects, Experience, Education)" },
+        suggestedSentence: { type: Type.STRING, description: "Truthful, actionable phrasing suggestion or practice project recommendation without fabricated metrics." },
+        evidenceStatus: { type: Type.STRING, description: "Strict factual status of candidate evidence." },
+        reason: { type: Type.STRING, description: "Clear explanation of why this requirement is critical for the target role." },
+        atsImpact: { type: Type.STRING, description: "Expected impact on ATS parsing." },
+        confidence: { type: Type.INTEGER, description: "Confidence score between 0 and 100." }
       },
       required: ["section", "suggestedSentence", "evidenceStatus", "reason", "atsImpact", "confidence"]
     };
 
-    const prompt = `Resume Context:\n${String(resumeText).substring(0, 1500)}\n\nMissing Item:\n${JSON.stringify(missingItem)}\n\nFrozen Profile:\n${JSON.stringify(frozenProfile).substring(0, 500)}`;
+    const prompt = `Candidate Resume Excerpt:\n${safeResumeText ? safeResumeText.substring(0, 2000) : "No resume text provided."}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }],
+      model: GEMINI_MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: { 
+        systemInstruction: systemPrompt,
         responseMimeType: "application/json", 
         responseSchema: schema,
         temperature: 0.1,
-        maxOutputTokens: 300
+        maxOutputTokens: 2048
       }
     });
 
     const responseText = response.text;
     if (!responseText) {
-      return sendError(res, "EMPTY_AI_RESPONSE", "Empty response received from tailoring engine.", 502);
+      return sendError(res, "EMPTY_AI_RESPONSE", "The AI service returned an empty response. Please retry.", 502);
     }
 
-    const result = JSON.parse(responseText);
+    let result: any;
+    try {
+      result = extractJsonFromAiResponse(responseText);
+    } catch (parseErr: any) {
+      console.error("Failed to parse Gemini response for /api/tailor-gap:", responseText);
+      return sendError(res, "AI_MALFORMED_RESPONSE", "The AI service returned an unparseable response format. Please retry.", 502);
+    }
 
     if (!validateTailorGap(result)) {
-      return sendError(res, "INVALID_AI_OUTPUT", "Tailor suggestion failed validation.", 502);
+      return sendError(res, "VALIDATION_ERROR", "The generated suggestion failed structural verification and was rejected.", 422);
+    }
+
+    // Factual validation: Ensure no unsupported quantitative metrics were fabricated in suggestedSentence
+    const generatedMetrics = extractNumericMetrics(result.suggestedSentence);
+    if (generatedMetrics.length > 0) {
+      const originalMetrics = extractNumericMetrics(safeResumeText);
+      const unsupported = generatedMetrics.filter(m => !originalMetrics.includes(m));
+      if (unsupported.length > 0) {
+        return sendError(
+          res, 
+          "VALIDATION_ERROR", 
+          `The generated suggestion contained fabricated metrics (${unsupported.join(", ")}). Factual validation rejected this output.`,
+          422
+        );
+      }
     }
 
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/tailor-gap:", error);
-    return sendError(res, "TAILOR_GAP_ERROR", "Failed to tailor gap.", 500, error.message || String(error));
+    const classified = classifyAiError(error);
+    return sendError(res, classified.code, classified.message, classified.httpStatus);
   }
 });
 
@@ -1057,7 +1485,7 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
     const prompt = `Original Resume Content:\n${resumeText}\n\nSelected Target Checklist Items:\n${JSON.stringify(selectedItems)}\n\nFrozen Requirement Profile:\n${JSON.stringify(frozenProfile)}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: GEMINI_MODEL,
       contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }],
       config: { 
         responseMimeType: "application/json", 
@@ -1104,6 +1532,12 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/tailor-resume-batch:", error);
+    const raw = error?.message || String(error);
+    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
+        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
+      const classified = classifyAiError(error);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
     return sendError(res, "BATCH_TAILOR_ERROR", "Failed to perform batch tailoring.", 500, error.message || String(error));
   }
 });
@@ -1462,8 +1896,8 @@ app.get("/api/outcome-intelligence/role/:roleTitle", async (req, res) => {
   }
 });
 
-// Setup Vite middleware / static files based on environment (skip if on Vercel serverless)
-if (!process.env.VERCEL) {
+// Setup Vite middleware / static files based on environment (skip if on Vercel serverless or testing)
+if (!process.env.VERCEL && !process.env.SKIP_SERVER_LISTEN) {
   async function setupApp() {
     if (process.env.NODE_ENV !== "production") {
       const { createServer: createViteServer } = await import("vite");

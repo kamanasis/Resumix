@@ -50,7 +50,7 @@ export function calculateCoOccurrences(
         const pairKey = `${skillA}|||${skillB}`;
 
         if (!pairCounts.has(pairKey)) {
-          pairCounts.set(pairKey, { skills: [skillA, skillB], count: 0 });
+          pairCounts.set(pairKey, { skills: [skillA, skillB] as [string, string], count: 0 });
         }
         pairCounts.get(pairKey)!.count += 1;
       }
