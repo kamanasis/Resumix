@@ -73,6 +73,17 @@ function sendError(res: express.Response, code: string, message: string, status 
 // Canonical Gemini Model configuration (overridable via process.env.GEMINI_MODEL)
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
+// Backend liveness check — does NOT call Gemini, does NOT expose secrets
+app.get("/api/health", (_req, res) => {
+  const key = process.env.GEMINI_API_KEY;
+  const aiConfigured = Boolean(key && key.trim() && key !== "MY_GEMINI_API_KEY");
+  return sendSuccess(res, {
+    status: "ok",
+    backend: "healthy",
+    ai: aiConfigured ? "configured" : "unconfigured"
+  });
+});
+
 export interface ClassifiedAiError {
   httpStatus: number;
   code:
@@ -924,10 +935,16 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
       return sendError(res, "EMPTY_AI_RESPONSE", "Empty response from requirement engine.", 502);
     }
 
-    const result = JSON.parse(responseText);
+    let result: any;
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error("AI returned malformed JSON:", responseText);
+      return sendError(res, "AI_INVALID_RESPONSE", "The AI provider returned an invalid requirement profile.", 502);
+    }
 
     if (!validateRequirementProfile(result)) {
-      return sendError(res, "INVALID_AI_OUTPUT", "Generated requirement profile failed validation.", 502);
+      return sendError(res, "AI_INVALID_RESPONSE", "The AI provider returned an invalid requirement profile.", 502);
     }
 
     // Stage 3: Deterministic Profile Hashing & Structured Model Building
@@ -986,7 +1003,7 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
       const classified = classifyAiError(error);
       return sendError(res, classified.code, classified.message, classified.httpStatus);
     }
-    return sendError(res, "REQUIREMENT_ENGINE_ERROR", "Failed to generate requirement profile.", 500, error.message || String(error));
+    return sendError(res, "INTERNAL_SERVER_ERROR", "Failed to generate requirement profile.", 500, error.message || String(error));
   }
 });
 
@@ -1896,27 +1913,54 @@ app.get("/api/outcome-intelligence/role/:roleTitle", async (req, res) => {
   }
 });
 
+// Global error handler — must be registered after all routes.
+// Catches any unhandled error that reaches Express and guarantees a JSON response.
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("Unhandled server error:", err?.message || err);
+  if (!res.headersSent) {
+    sendError(res, "SERVER_ERROR", "An unexpected server error occurred. Please try again.", 500);
+  }
+});
+
 // Setup Vite middleware / static files based on environment (skip if on Vercel serverless or testing)
 if (!process.env.VERCEL && !process.env.SKIP_SERVER_LISTEN) {
   async function setupApp() {
     if (process.env.NODE_ENV !== "production") {
       const { createServer: createViteServer } = await import("vite");
+      const http = await import("http");
+
+      // Create the raw HTTP server first so we can hand it to Vite's HMR
+      // WebSocket initializer.  Express is passed as the request handler so
+      // all Express routes and middlewares still apply to every request.
+      const httpServer = http.createServer(app);
+
       const vite = await createViteServer({
-        server: { middlewareMode: true },
+        server: {
+          middlewareMode: true,
+          hmr: { server: httpServer },
+        },
         appType: "spa",
       });
+
+      // Add Vite's middlewares to Express BEFORE the server starts listening
+      // so the complete middleware chain (including Vite's error handler) is
+      // in place before any request arrives.
       app.use(vite.middlewares);
+
+      httpServer.listen(PORT, "0.0.0.0", () => {
+        console.log(`Resumix server running on http://0.0.0.0:${PORT}`);
+      });
     } else {
       const distPath = path.join(process.cwd(), "dist");
       app.use(express.static(distPath));
       app.get("*", (req, res) => {
         res.sendFile(path.join(distPath, "index.html"));
       });
-    }
 
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Resumix server running on http://0.0.0.0:${PORT}`);
-    });
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Resumix server running on http://0.0.0.0:${PORT}`);
+      });
+    }
   }
 
   setupApp();

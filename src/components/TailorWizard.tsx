@@ -35,7 +35,7 @@ function mapFrontendAiError(errorCode?: string, errorMsg?: string): { title: str
     title = "AI Rate Limit Exceeded";
   } else if (code === "AI_TIMEOUT") {
     title = "AI Request Timeout";
-  } else if (code === "AI_MALFORMED_RESPONSE") {
+  } else if (code === "AI_INVALID_RESPONSE" || code === "AI_MALFORMED_RESPONSE") {
     title = "AI Output Malformed";
   } else if (code === "VALIDATION_ERROR" || code === "FACTUAL_VALIDATION_FAILED") {
     title = "Factual Validation Rejected";
@@ -43,9 +43,32 @@ function mapFrontendAiError(errorCode?: string, errorMsg?: string): { title: str
     title = "Incomplete Analysis Context";
   } else if (code === "AI_PROVIDER_ERROR") {
     title = "AI Service Error";
+  } else if (code === "INTERNAL_SERVER_ERROR") {
+    title = "Internal Server Error";
   }
 
   return { title, message };
+}
+
+// Wraps fetch + JSON parsing so that a non-JSON server response (crash, Express
+// default error, plain-text error from any middleware) never surfaces as a raw
+// SyntaxError in the UI. Instead it throws a clean, readable Error.
+async function safeFetchJson(
+  url: string,
+  options: RequestInit
+): Promise<{ res: Response; json: any }> {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `The server returned an unexpected response (HTTP ${res.status}). ` +
+        "Please ensure the application server is running correctly and retry."
+    );
+  }
+  return { res, json };
 }
 
 export default function TailorWizard({
@@ -276,9 +299,9 @@ export default function TailorWizard({
     setErrorDetails({ title: "", message: "" });
 
     try {
-      // Phase 1: Generate Requirement Profile
-      setLoadingMessage("Phase 1: Generating Frozen Requirement Profile...");
-      const profileRes = await fetch("/api/generate-requirement-profile", {
+      // Generate Requirement Profile
+      setLoadingMessage("Generating Frozen Requirement Profile...");
+      const { res: profileRes, json: profileJson } = await safeFetchJson("/api/generate-requirement-profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -289,7 +312,6 @@ export default function TailorWizard({
         })
       });
       
-      const profileJson = await profileRes.json();
       if (!profileRes.ok || !profileJson.success || !profileJson.data) {
         const errorInfo = mapFrontendAiError(
           profileJson.error?.code,
@@ -306,15 +328,14 @@ export default function TailorWizard({
       }
       setFrozenProfile(profileData);
 
-      // Phase 2: Parse Resume Structure
-      setLoadingMessage("Phase 2: Parsing Current Resume Structure...");
-      const parseRes = await fetch("/api/parse-resume", {
+      // Parse Resume Structure
+      setLoadingMessage("Parsing Current Resume Structure...");
+      const { res: parseRes, json: parseJson } = await safeFetchJson("/api/parse-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resumeText: selectedResume.content })
       });
 
-      const parseJson = await parseRes.json();
       if (!parseRes.ok || !parseJson.success || !parseJson.data) {
         const errorInfo = mapFrontendAiError(
           parseJson.error?.code,
@@ -333,9 +354,12 @@ export default function TailorWizard({
       
     } catch (err: any) {
       console.error("Pipeline failure:", err);
+      const isNetworkFailure = err instanceof TypeError && err.message === "Failed to fetch";
       setErrorDetails({
-        title: "Analysis Unavailable",
-        message: err.message || "Resumix could not complete the analysis because the service returned an invalid response."
+        title: isNetworkFailure ? "Server Unreachable" : "Analysis Unavailable",
+        message: isNetworkFailure
+          ? "Unable to connect to the Resumix analysis server. Please ensure the application server is running (npm run dev) and try again."
+          : (err.message || "Resumix could not complete the analysis because the service returned an invalid response.")
       });
       setStep("ERROR");
     }
@@ -343,7 +367,7 @@ export default function TailorWizard({
 
   const runGapAnalysis = async (parsed: ParsedResume, profile: RequirementProfile) => {
     setLoadingMessage("Analyzing Missing Requirements...");
-    const gapRes = await fetch("/api/gap-analysis", {
+    const { res: gapRes, json: gapJson } = await safeFetchJson("/api/gap-analysis", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -353,7 +377,6 @@ export default function TailorWizard({
       })
     });
 
-    const gapJson = await gapRes.json();
     if (!gapRes.ok || !gapJson.success || !gapJson.data) {
       const errorInfo = mapFrontendAiError(
         gapJson.error?.code,
