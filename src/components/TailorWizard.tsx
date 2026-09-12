@@ -590,6 +590,45 @@ export default function TailorWizard({
       }
       setBatchResult(data.data);
       setDashboardTab("tailored");
+
+      // Persist legitimate completed tailored resume record to Firestore
+      if (selectedResume && userId) {
+        try {
+          const analysisId = doc(collection(db, "users", userId, "analyses")).id;
+          const afterScore = (data.data as any)?.scoreComparison?.afterAtsScore ?? gapReport?.atsScore ?? 0;
+          const beforeScore = (data.data as any)?.scoreComparison?.beforeAtsScore ?? gapReport?.atsScore ?? 0;
+          const delta = (data.data as any)?.scoreComparison?.atsScoreDelta ?? (afterScore - beforeScore);
+
+          const analysisDoc = {
+            id: analysisId,
+            userId,
+            resumeId: selectedResume.id,
+            resumeName: selectedResume.name,
+            targetCompany,
+            targetRole,
+            jobDescription: jobDescription || "",
+            createdAt: new Date().toISOString(),
+            matchingScore: afterScore,
+            atsScore: afterScore,
+            beforeAtsScore: beforeScore,
+            afterAtsScore: afterScore,
+            atsScoreDelta: delta,
+            tailoredContent: data.data.tailoredContent || "",
+            suggestedChanges: (data.data.explanations || []).map((e: any) => `- **${e.whatChanged}**: ${e.why}`).join("\n"),
+            tailoredBullets: (data.data.changes || []).map((c: any) => ({ current: c.originalText, improved: c.generatedText })),
+            responsibilities: frozenProfile?.responsibilities || [],
+            requiredTechnologies: frozenProfile?.technologies || frozenProfile?.requiredSkills || [],
+            softSkills: frozenProfile?.softSkills || [],
+            atsKeywords: frozenProfile?.atsKeywords || [],
+            status: "COMPLETED"
+          };
+
+          await setDoc(doc(db, "users", userId, "analyses", analysisId), analysisDoc);
+          onAnalysisCreated();
+        } catch (saveErr) {
+          console.warn("Could not save tailored analysis to Firestore:", saveErr);
+        }
+      }
     } catch (err: any) {
       console.error("Batch tailor error:", err);
       setErrorDetails({

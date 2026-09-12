@@ -59,7 +59,7 @@ export default function App() {
       {!user ? (
         <AuthPage />
       ) : (
-        <Dashboard user={user} />
+        <Dashboard key={user.uid} user={user} />
       )}
     </>
   );

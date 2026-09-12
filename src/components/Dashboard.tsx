@@ -34,6 +34,7 @@ import ApplicationTracker from "./ApplicationTracker";
 
 interface DashboardProps {
   user: any;
+  key?: string | number;
 }
 
 type Tab = "resumes" | "tailor" | "fresher" | "applications" | "history";
@@ -48,59 +49,135 @@ export default function Dashboard({ user }: DashboardProps) {
   // Firestore Sync state
   const [resumes, setResumes] = useState<ResumeFile[]>([]);
   const [analyses, setAnalyses] = useState<ResumeAnalysis[]>([]);
-  const [selectedResumeId, setSelectedResumeId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [gapReports, setGapReports] = useState<any[]>([]);
+  const [selectedResumeId, setSelectedResumeId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(`resumix_selected_resume_${user.uid}`);
+    } catch {
+      return null;
+    }
+  });
+
+  const [resumesLoading, setResumesLoading] = useState(true);
+  const [analysesLoading, setAnalysesLoading] = useState(true);
+  const [gapReportsLoading, setGapReportsLoading] = useState(true);
 
   // Sync uploaded resumes from Firestore
   useEffect(() => {
+    setResumesLoading(true);
     const resumesQuery = query(
       collection(db, "users", user.uid, "resumes"),
       orderBy("uploadedAt", "desc")
     );
 
     const unsubscribe = onSnapshot(resumesQuery, (snapshot) => {
+      const seenIds = new Set<string>();
       const docs: ResumeFile[] = [];
-      snapshot.forEach((doc) => {
-        docs.push(doc.data() as ResumeFile);
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as ResumeFile;
+        const id = data.id || docSnap.id;
+        if (id && !seenIds.has(id) && typeof data.content === "string") {
+          seenIds.add(id);
+          docs.push({ ...data, id });
+        }
       });
+
       setResumes(docs);
       setPermissionError(false);
       
-      // Auto-select first resume if nothing is selected yet
-      if (docs.length > 0 && !selectedResumeId) {
-        setSelectedResumeId(docs[0].id);
+      // Selected resume resolution with user-scoped storage validation
+      let activeSelectedId: string | null = null;
+      try {
+        const storedId = localStorage.getItem(`resumix_selected_resume_${user.uid}`);
+        if (storedId && docs.some(r => r.id === storedId)) {
+          activeSelectedId = storedId;
+        } else if (selectedResumeId && docs.some(r => r.id === selectedResumeId)) {
+          activeSelectedId = selectedResumeId;
+        } else if (docs.length > 0) {
+          activeSelectedId = docs[0].id;
+        }
+      } catch {
+        if (docs.length > 0) activeSelectedId = docs[0].id;
       }
-      setLoading(false);
+
+      setSelectedResumeId(activeSelectedId);
+      try {
+        if (activeSelectedId) {
+          localStorage.setItem(`resumix_selected_resume_${user.uid}`, activeSelectedId);
+        } else {
+          localStorage.removeItem(`resumix_selected_resume_${user.uid}`);
+        }
+      } catch {}
+
+      setResumesLoading(false);
     }, (error) => {
       console.error("Error loading resumes:", error);
       if (error.code === "permission-denied" || error.message?.toLowerCase().includes("permission")) {
         setPermissionError(true);
       }
-      setLoading(false);
+      setResumesLoading(false);
     });
 
     return () => unsubscribe();
   }, [user.uid]);
 
-  // Sync resume analyses from Firestore
+  // Sync completed tailored analyses from Firestore
   useEffect(() => {
+    setAnalysesLoading(true);
     const analysesQuery = query(
       collection(db, "users", user.uid, "analyses"),
       orderBy("createdAt", "desc")
     );
 
     const unsubscribe = onSnapshot(analysesQuery, (snapshot) => {
+      const seenIds = new Set<string>();
       const docs: ResumeAnalysis[] = [];
-      snapshot.forEach((doc) => {
-        docs.push(doc.data() as ResumeAnalysis);
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as ResumeAnalysis;
+        const id = data.id || docSnap.id;
+        if (id && !seenIds.has(id)) {
+          seenIds.add(id);
+          docs.push({ ...data, id });
+        }
       });
       setAnalyses(docs);
       setPermissionError(false);
+      setAnalysesLoading(false);
     }, (error) => {
       console.error("Error loading analyses:", error);
       if (error.code === "permission-denied" || error.message?.toLowerCase().includes("permission")) {
         setPermissionError(true);
       }
+      setAnalysesLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user.uid]);
+
+  // Sync gap reports for comprehensive ATS compatibility history
+  useEffect(() => {
+    setGapReportsLoading(true);
+    const gapReportsQuery = query(
+      collection(db, "users", user.uid, "gapReports"),
+      orderBy("createdAt", "desc")
+    );
+
+    const unsubscribe = onSnapshot(gapReportsQuery, (snapshot) => {
+      const seenIds = new Set<string>();
+      const docs: any[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const id = data.id || docSnap.id;
+        if (id && !seenIds.has(id)) {
+          seenIds.add(id);
+          docs.push({ ...data, id });
+        }
+      });
+      setGapReports(docs);
+      setGapReportsLoading(false);
+    }, (error) => {
+      console.error("Error loading gap reports:", error);
+      setGapReportsLoading(false);
     });
 
     return () => unsubscribe();
@@ -119,14 +196,21 @@ export default function Dashboard({ user }: DashboardProps) {
     return resumes.find((r) => r.id === selectedResumeId) || null;
   };
 
-  // Stats summaries
-  const highestMatchScore = analyses.length > 0 
-    ? Math.max(...analyses.map(a => a.matchingScore)) 
-    : 0;
+  // Calculate highest match from real persisted data (completed analyses and gap reports)
+  const allValidScores: number[] = [
+    ...analyses.map(a => typeof a.matchingScore === "number" ? a.matchingScore : (a as any).atsScore),
+    ...gapReports.map(g => typeof g.atsScore === "number" ? g.atsScore : g.scores?.atsCompatibility)
+  ].filter((s): s is number => typeof s === "number" && !isNaN(s) && s >= 0 && s <= 100);
+
+  const highestMatchScore = allValidScores.length > 0 ? Math.max(...allValidScores) : null;
 
   const handleResumeSelect = (id: string) => {
+    const target = resumes.find(r => r.id === id);
+    if (!target) return;
     setSelectedResumeId(id);
-    // Automatically switch tabs to let them customize once they select
+    try {
+      localStorage.setItem(`resumix_selected_resume_${user.uid}`, id);
+    } catch {}
     setActiveTab("tailor");
   };
 
@@ -398,7 +482,9 @@ service cloud.firestore {
               </div>
               <div>
                 <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block">Resumes</span>
-                <span className="text-lg font-bold font-display text-slate-800">{resumes.length}</span>
+                <span className="text-lg font-bold font-display text-slate-800">
+                  {resumesLoading ? "..." : resumes.length}
+                </span>
               </div>
             </div>
 
@@ -408,7 +494,9 @@ service cloud.firestore {
               </div>
               <div>
                 <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block">Jobs Tailored</span>
-                <span className="text-lg font-bold font-display text-slate-800">{analyses.length}</span>
+                <span className="text-lg font-bold font-display text-slate-800">
+                  {analysesLoading ? "..." : analyses.length}
+                </span>
               </div>
             </div>
 
@@ -419,7 +507,7 @@ service cloud.firestore {
               <div>
                 <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block">Highest Match</span>
                 <span className="text-lg font-bold font-display text-slate-800">
-                  {highestMatchScore > 0 ? `${highestMatchScore}%` : "—"}
+                  {analysesLoading && gapReportsLoading ? "..." : (highestMatchScore !== null ? `${highestMatchScore}%` : "—")}
                 </span>
               </div>
             </div>
@@ -431,7 +519,7 @@ service cloud.firestore {
               <div className="min-w-0 flex-1">
                 <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block">Selected File</span>
                 <span className="text-xs font-semibold text-slate-800 truncate block">
-                  {getSelectedResume() ? getSelectedResume()?.name : "None selected"}
+                  {resumesLoading ? "Loading..." : (getSelectedResume() ? getSelectedResume()?.name : "None selected")}
                 </span>
               </div>
             </div>
@@ -439,7 +527,7 @@ service cloud.firestore {
 
           {/* Dynamic Tab Views - Glassmorphic Content Container */}
           <div className="bg-white/70 backdrop-blur-xl border border-white rounded-3xl p-6 lg:p-8 shadow-sm flex-1 flex flex-col min-h-[460px]">
-            {loading ? (
+            {resumesLoading && analysesLoading ? (
               <div className="flex-1 flex flex-col items-center justify-center text-center">
                 <div className="w-10 h-10 border-4 border-cyan-100 border-t-cyan-600 rounded-full animate-spin mb-3" />
                 <p className="text-slate-500 text-sm font-medium">Synchronizing workspace files...</p>
