@@ -302,10 +302,12 @@ export interface ScoreBreakdownDetails {
   requiredSkills: { score: number; weight: number; matched: number; total: number; explanation: string };
   preferredSkills: { score: number; weight: number; matched: number; total: number; explanation: string };
   keywordCoverage: { score: number; weight: number; matched: number; total: number; explanation: string };
-  experienceMatch: { score: number; weight: number; explanation: string };
+  experienceMatch: { score: number; weight: number; isRequired?: boolean; explanation: string };
   roleAlignment: { score: number; weight: number; explanation: string };
   resumeStructure: { score: number; weight: number; explanation: string };
+  educationMatch?: { score: number; weight: number; isRequired: boolean; explanation: string };
   criticalGapPenalty: number;
+  criticalGapCap?: number;
 }
 
 export interface MissingItem {

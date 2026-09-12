@@ -1339,7 +1339,8 @@ app.post("/api/gap-analysis", async (req, res) => {
       {
         targetRole: frozenProfile.targetRole,
         targetCompany: frozenProfile.targetCompany,
-        jobDescription: frozenProfile.jobDescription
+        jobDescription: frozenProfile.jobDescription,
+        experienceLevel: frozenProfile.experienceLevel
       }
     );
 

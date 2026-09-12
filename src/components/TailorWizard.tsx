@@ -1049,12 +1049,12 @@ export default function TailorWizard({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {/* Main ATS Gauge Card */}
           <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-slate-950 text-white rounded-3xl p-6 shadow-md flex flex-col justify-between relative overflow-hidden border border-slate-800">
-            <div className="relative z-10 space-y-1">
+            <div className="relative z-10 space-y-2">
               <div className="flex justify-between items-center">
-                <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-400 flex items-center gap-1">
-                  <Activity className="w-3.5 h-3.5" /> ATS Compatibility
+                <span className="text-[11px] uppercase font-bold tracking-wider text-cyan-400 flex items-center gap-1.5">
+                  <Activity className="w-4 h-4" /> ATS COMPATIBILITY SCORE
                 </span>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                   atsScore >= 80 ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" :
                   atsScore >= 60 ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" :
                   "bg-rose-500/20 text-rose-300 border border-rose-500/30"
@@ -1062,11 +1062,13 @@ export default function TailorWizard({
                   {atsScore >= 80 ? "Strong Match" : atsScore >= 60 ? "Competitive" : "Needs Work"}
                 </span>
               </div>
-              <p className="text-slate-400 text-xs">Deterministic requirement & keyword alignment</p>
+              <p className="text-slate-300 text-xs leading-relaxed">
+                This score estimates how well your resume matches the requirements and signals in the selected job posting using Resumix's deterministic ATS analysis.
+              </p>
             </div>
 
             {/* Big Score Display */}
-            <div className="py-6 my-auto text-center relative z-10">
+            <div className="py-5 my-auto text-center relative z-10">
               <div className="inline-flex items-baseline gap-1">
                 <span className="text-6xl font-display font-extrabold tracking-tight text-white">
                   {atsScore}
@@ -1094,39 +1096,39 @@ export default function TailorWizard({
           <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-3">
             <ScoreCard 
               title="Required Skills" 
-              score={gapReport.scoreBreakdown?.requiredPercentage ?? gapReport.scores.requiredSkills}
+              score={gapReport.scoreBreakdownDetails?.requiredSkills?.score ?? gapReport.scoreBreakdown?.requiredPercentage ?? gapReport.scores.requiredSkills}
               subtitle={`${gapReport.scoreBreakdown?.requiredMatched ?? 0} of ${gapReport.scoreBreakdown?.requiredTotal ?? 0} verified`}
-              badgeText="40% of ATS Score"
+              badgeText={`${Math.round((gapReport.scoreBreakdownDetails?.requiredSkills?.weight ?? 0.35) * 100)}% of ATS Score`}
             />
             <ScoreCard 
               title="Preferred Skills" 
-              score={gapReport.scoreBreakdown?.preferredPercentage ?? gapReport.scores.preferredSkills}
+              score={gapReport.scoreBreakdownDetails?.preferredSkills?.score ?? gapReport.scoreBreakdown?.preferredPercentage ?? gapReport.scores.preferredSkills}
               subtitle={`${gapReport.scoreBreakdown?.preferredMatched ?? 0} of ${gapReport.scoreBreakdown?.preferredTotal ?? 0} verified`}
-              badgeText="20% of ATS Score"
+              badgeText={`${Math.round((gapReport.scoreBreakdownDetails?.preferredSkills?.weight ?? 0.15) * 100)}% of ATS Score`}
             />
             <ScoreCard 
               title="Keyword Coverage" 
-              score={gapReport.scoreBreakdown?.keywordPercentage ?? 0}
+              score={gapReport.scoreBreakdownDetails?.keywordCoverage?.score ?? gapReport.scoreBreakdown?.keywordPercentage ?? 0}
               subtitle={`${gapReport.scoreBreakdown?.keywordsMatched ?? 0} of ${gapReport.scoreBreakdown?.keywordsTotal ?? 0} covered`}
-              badgeText="15% of ATS Score"
+              badgeText={`${Math.round((gapReport.scoreBreakdownDetails?.keywordCoverage?.weight ?? 0.15) * 100)}% of ATS Score`}
             />
             <ScoreCard 
               title="Experience Depth" 
-              score={gapReport.scores.experienceMatch ?? 0}
-              subtitle={`${(parsedResume?.experience || []).length} role(s) verified`}
-              badgeText="10% of ATS Score"
+              score={gapReport.scoreBreakdownDetails?.experienceMatch?.score ?? gapReport.scores.experienceMatch ?? 0}
+              subtitle={gapReport.scoreBreakdownDetails?.experienceMatch?.isRequired ? `${(parsedResume?.experience || []).length} role(s) verified` : "Optional / No Min Years"}
+              badgeText={`${Math.round((gapReport.scoreBreakdownDetails?.experienceMatch?.weight ?? 0.15) * 100)}% of ATS Score`}
             />
             <ScoreCard 
               title="Role Alignment" 
               score={gapReport.scoreBreakdownDetails?.roleAlignment?.score ?? gapReport.scores.companyMatch ?? 70}
               subtitle="Target vocabulary match"
-              badgeText="10% of ATS Score"
+              badgeText={`${Math.round((gapReport.scoreBreakdownDetails?.roleAlignment?.weight ?? 0.10) * 100)}% of ATS Score`}
             />
             <ScoreCard 
-              title="Resume Structure" 
-              score={gapReport.scores.formatting ?? 90}
+              title="ATS Readability" 
+              score={gapReport.scoreBreakdownDetails?.resumeStructure?.score ?? gapReport.scores.formatting ?? 90}
               subtitle="Parsing & layout clarity"
-              badgeText="5% of ATS Score"
+              badgeText={`${Math.round((gapReport.scoreBreakdownDetails?.resumeStructure?.weight ?? 0.10) * 100)}% of ATS Score`}
             />
           </div>
         </div>
@@ -2383,14 +2385,16 @@ function WhyThisScoreModal({
 
         {/* Formula Factor Grid */}
         <div className="space-y-3">
-          <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Scoring Components & Weights</h4>
+          <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Scoring Components & Dynamic Weights</h4>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {/* Required Skills */}
             <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
               <div className="flex justify-between items-center text-xs">
                 <span className="font-bold text-slate-800">Required Skills Coverage</span>
-                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">40% Weight</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">
+                  {Math.round((b?.requiredSkills?.weight ?? 0.35) * 100)}% Weight
+                </span>
               </div>
               <div className="text-lg font-display font-bold text-cyan-600">
                 {b?.requiredSkills?.score ?? gapReport.scoreBreakdown?.requiredPercentage ?? 0}%
@@ -2404,7 +2408,9 @@ function WhyThisScoreModal({
             <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
               <div className="flex justify-between items-center text-xs">
                 <span className="font-bold text-slate-800">Preferred Qualifications</span>
-                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">20% Weight</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">
+                  {Math.round((b?.preferredSkills?.weight ?? 0.15) * 100)}% Weight
+                </span>
               </div>
               <div className="text-lg font-display font-bold text-cyan-600">
                 {b?.preferredSkills?.score ?? gapReport.scoreBreakdown?.preferredPercentage ?? 0}%
@@ -2418,7 +2424,9 @@ function WhyThisScoreModal({
             <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
               <div className="flex justify-between items-center text-xs">
                 <span className="font-bold text-slate-800">Keyword & Tool Coverage</span>
-                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">15% Weight</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">
+                  {Math.round((b?.keywordCoverage?.weight ?? 0.15) * 100)}% Weight
+                </span>
               </div>
               <div className="text-lg font-display font-bold text-cyan-600">
                 {b?.keywordCoverage?.score ?? gapReport.scoreBreakdown?.keywordPercentage ?? 0}%
@@ -2428,11 +2436,13 @@ function WhyThisScoreModal({
               </p>
             </div>
 
-            {/* Experience Depth */}
+            {/* Experience Alignment */}
             <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
               <div className="flex justify-between items-center text-xs">
                 <span className="font-bold text-slate-800">Experience Alignment</span>
-                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">10% Weight</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">
+                  {Math.round((b?.experienceMatch?.weight ?? 0.15) * 100)}% Weight
+                </span>
               </div>
               <div className="text-lg font-display font-bold text-cyan-600">
                 {b?.experienceMatch?.score ?? gapReport.scores.experienceMatch ?? 0}%
@@ -2445,8 +2455,10 @@ function WhyThisScoreModal({
             {/* Role Alignment */}
             <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
               <div className="flex justify-between items-center text-xs">
-                <span className="font-bold text-slate-800">Target Role Vocabulary</span>
-                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">10% Weight</span>
+                <span className="font-bold text-slate-800">Target Role Alignment</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">
+                  {Math.round((b?.roleAlignment?.weight ?? 0.10) * 100)}% Weight
+                </span>
               </div>
               <div className="text-lg font-display font-bold text-cyan-600">
                 {b?.roleAlignment?.score ?? gapReport.scores.companyMatch ?? 70}%
@@ -2456,11 +2468,13 @@ function WhyThisScoreModal({
               </p>
             </div>
 
-            {/* Resume Structure */}
+            {/* Resume Structure & ATS Readability */}
             <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
               <div className="flex justify-between items-center text-xs">
-                <span className="font-bold text-slate-800">Resume Structure Quality</span>
-                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">5% Weight</span>
+                <span className="font-bold text-slate-800">ATS Readability & Hygiene</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">
+                  {Math.round((b?.resumeStructure?.weight ?? 0.10) * 100)}% Weight
+                </span>
               </div>
               <div className="text-lg font-display font-bold text-cyan-600">
                 {b?.resumeStructure?.score ?? gapReport.scores.formatting ?? 90}%
@@ -2469,17 +2483,37 @@ function WhyThisScoreModal({
                 {b?.resumeStructure?.explanation ?? "Contact info completeness, sections, and parse legibility."}
               </p>
             </div>
+
+            {/* Education Match if evaluated */}
+            {b?.educationMatch && b.educationMatch.weight > 0 && (
+              <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm md:col-span-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="font-bold text-slate-800">Education Credentials</span>
+                  <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">
+                    {Math.round(b.educationMatch.weight * 100)}% Weight
+                  </span>
+                </div>
+                <div className="text-lg font-display font-bold text-cyan-600">
+                  {b.educationMatch.score}%
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  {b.educationMatch.explanation}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Penalty breakdown if any */}
-        {penalty > 0 && (
-          <div className="p-3.5 bg-red-50/80 border border-red-200 rounded-2xl flex items-center justify-between text-xs text-red-900">
+        {/* Critical Gap Gating / Capping */}
+        {((b?.criticalGapCap !== undefined && b.criticalGapCap < 100) || (gapReport.scoreBreakdown?.criticalGapsCount ?? 0) > 0) && (
+          <div className="p-3.5 bg-amber-50/90 border border-amber-200 rounded-2xl flex items-center justify-between text-xs text-amber-900">
             <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-              <span>Critical Gap Deductions: <strong>{gapReport.scoreBreakdown?.criticalGapsCount ?? 0} missing required skill(s)</strong></span>
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Critical Requirement Gating: <strong>{gapReport.scoreBreakdown?.criticalGapsCount ?? 0} missing required qualification(s)</strong></span>
             </div>
-            <span className="font-bold font-mono text-red-700 bg-red-100 px-2 py-0.5 rounded">-{penalty} pts</span>
+            <span className="font-bold font-mono text-amber-800 bg-amber-100 px-2.5 py-1 rounded">
+              Score Capped at {b?.criticalGapCap ?? 100}/100
+            </span>
           </div>
         )}
 

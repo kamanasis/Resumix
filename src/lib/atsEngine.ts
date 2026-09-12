@@ -82,17 +82,38 @@ export interface EvaluationResult {
  * - Experience Depth/Alignment: 10%
  * - Target Role Alignment: 10%
  * - Resume Structure Quality: 5%
- * Penalty: 10 points deducted per unfulfilled Critical Gap.
  */
-export const ATS_WEIGHTS = {
+export const ATS_BASE_WEIGHTS = {
   REQUIRED: 0.40,
-  PREFERRED: 0.20,
+  ROLE_ALIGNMENT: 0.20,
   KEYWORDS: 0.15,
   EXPERIENCE: 0.10,
-  ROLE_ALIGNMENT: 0.10,
+  PREFERRED: 0.10,
+  STRUCTURE: 0.05,
+  EDUCATION: 0.05
+};
+
+export const ATS_WEIGHTS = {
+  REQUIRED: 0.40,
+  PREFERRED: 0.10,
+  KEYWORDS: 0.15,
+  EXPERIENCE: 0.10,
+  ROLE_ALIGNMENT: 0.20,
   STRUCTURE: 0.05,
   CRITICAL_GAP_PENALTY: 10
 };
+
+// Stop words ignored during keyword analysis to prevent keyword stuffing & noise
+const STOP_WORDS = new Set([
+  "the", "and", "with", "for", "from", "in", "on", "at", "to", "a", "an", "by", "as", "of", "or",
+  "is", "are", "be", "will", "our", "your", "we", "you", "their", "this", "that", "etc", "must",
+  "have", "has", "had", "do", "does", "did", "using", "used", "such", "including", "per", "across",
+  "into", "within", "candidate", "experience", "skills", "ability", "strong", "work", "working",
+  "team", "teams", "proven", "track", "record", "good", "proficient", "familiarity", "plus", "ideal",
+  "preferred", "required", "qualifications", "requirements", "responsibilities", "role", "position",
+  "job", "company", "looking", "seeking", "years", "year", "degree", "field", "related", "should",
+  "would", "could", "also", "about", "other", "all", "more", "most", "than", "then", "there", "any"
+]);
 
 // Known foundational-to-specialized technology relationships for detecting MISSING_ADDABLE
 const RELATED_TECH_MAP: Record<string, string[]> = {
@@ -111,17 +132,17 @@ const RELATED_TECH_MAP: Record<string, string[]> = {
   "rest api": ["graphql", "api design", "microservices", "web services", "postman"]
 };
 
-/**
- * Evaluates candidate evidence against target requirements with 100% deterministic logic.
- */
 export function evaluateResumeAgainstRequirements(
   parsedResume: ParsedResume,
   frozenRequirements: TargetRequirement[],
   rawResumeText: string = "",
-  context?: { targetRole?: string; targetCompany?: string; jobDescription?: string }
+  context?: { targetRole?: string; targetCompany?: string; jobDescription?: string; experienceLevel?: string }
 ): EvaluationResult {
   const evaluatedRequirements: TargetRequirement[] = [];
   const missingItems: MissingItem[] = [];
+
+  const experienceCount = (parsedResume.experience || []).length;
+  const educationCount = (parsedResume.education || []).length;
 
   // Normalize candidate skills
   const candidateSkills = (parsedResume.skills || []).map(s => ({
@@ -161,9 +182,10 @@ export function evaluateResumeAgainstRequirements(
       const expText = `${exp.role || ""} ${exp.company || ""} ${exp.description || ""}`;
       for (const req of frozenRequirements) {
         const canonicalReq = req.canonicalName.toLowerCase();
-        if (!evidenceMap.has(canonicalReq) && expText.toLowerCase().includes(canonicalReq)) {
-          const regex = new RegExp(`([^.?!]*\\b${escapeRegExp(req.name)}\\b[^.?!]*)`, "i");
-          const match = expText.match(regex);
+        const wordRegex = new RegExp(`\\b${escapeRegExp(req.name)}\\b`, "i");
+        if (!evidenceMap.has(canonicalReq) && wordRegex.test(expText)) {
+          const sentenceRegex = new RegExp(`([^.?!]*\\b${escapeRegExp(req.name)}\\b[^.?!]*)`, "i");
+          const match = expText.match(sentenceRegex);
           evidenceMap.set(canonicalReq, {
             quote: match ? match[0].trim() : `Applied ${req.name} as ${exp.role} at ${exp.company}.`,
             location: `Experience → ${exp.role} at ${exp.company}`
@@ -179,9 +201,10 @@ export function evaluateResumeAgainstRequirements(
       const projText = `${proj.title || ""} ${proj.description || ""}`;
       for (const req of frozenRequirements) {
         const canonicalReq = req.canonicalName.toLowerCase();
-        if (!evidenceMap.has(canonicalReq) && projText.toLowerCase().includes(canonicalReq)) {
-          const regex = new RegExp(`([^.?!]*\\b${escapeRegExp(req.name)}\\b[^.?!]*)`, "i");
-          const match = projText.match(regex);
+        const wordRegex = new RegExp(`\\b${escapeRegExp(req.name)}\\b`, "i");
+        if (!evidenceMap.has(canonicalReq) && wordRegex.test(projText)) {
+          const sentenceRegex = new RegExp(`([^.?!]*\\b${escapeRegExp(req.name)}\\b[^.?!]*)`, "i");
+          const match = projText.match(sentenceRegex);
           evidenceMap.set(canonicalReq, {
             quote: match ? match[0].trim() : `Demonstrated ${req.name} in project "${proj.title}".`,
             location: `Projects → ${proj.title}`
@@ -280,7 +303,7 @@ export function evaluateResumeAgainstRequirements(
       ...req,
       status,
       evidenceQuote,
-      confidence: isMatched ? 100 : 0
+      confidence: isMatched ? (hasDeepEvidence ? 100 : 65) : 0
     };
     evaluatedRequirements.push(evaluatedReq);
 
@@ -332,70 +355,240 @@ export function evaluateResumeAgainstRequirements(
   const matchedRequirements = evaluatedRequirements.filter(r => r.status === "PRESENT");
   const unverifiedRequirements = evaluatedRequirements.filter(r => r.status === "UNVERIFIED");
 
-  // Deterministic Coverage Calculations
+  // 1. Evidence-Weighted Skill Matching
   const requiredItems = evaluatedRequirements.filter(r => r.importance === "REQUIRED");
   const preferredItems = evaluatedRequirements.filter(r => r.importance === "PREFERRED");
-  const keywordItems = evaluatedRequirements.filter(r => r.category === "KEYWORD" || r.category === "TECHNICAL_SKILL");
 
   const requiredTotal = requiredItems.length;
   const requiredMatched = requiredItems.filter(r => r.status === "PRESENT").length;
-  const requiredPercentage = requiredTotal > 0 ? (requiredMatched / requiredTotal) * 100 : 100;
+  const requiredWeightedCredits = requiredItems.reduce((sum, r) => {
+    if (r.status !== "PRESENT") return sum;
+    return sum + (r.confidence === 100 ? 1.0 : 0.65);
+  }, 0);
+  const requiredPercentage = requiredTotal > 0 ? (requiredWeightedCredits / requiredTotal) * 100 : 100;
 
   const preferredTotal = preferredItems.length;
   const preferredMatched = preferredItems.filter(r => r.status === "PRESENT").length;
-  const preferredPercentage = preferredTotal > 0 ? (preferredMatched / preferredTotal) * 100 : 100;
+  const preferredWeightedCredits = preferredItems.reduce((sum, r) => {
+    if (r.status !== "PRESENT") return sum;
+    return sum + (r.confidence === 100 ? 1.0 : 0.65);
+  }, 0);
+  const preferredPercentage = preferredTotal > 0 ? (preferredWeightedCredits / preferredTotal) * 100 : 100;
 
-  const keywordsTotal = keywordItems.length;
-  const keywordsMatched = keywordItems.filter(r => r.status === "PRESENT").length;
-  const keywordPercentage = keywordsTotal > 0 ? (keywordsMatched / keywordsTotal) * 100 : 100;
-
-  // Experience & Education Alignment
-  const experienceCount = (parsedResume.experience || []).length;
-  const experienceMatchScore = experienceCount > 0 
-    ? Math.min(100, Math.round(experienceCount * 33.3)) 
-    : (requiredTotal === 0 ? 100 : 30);
-  
-  const educationCount = (parsedResume.education || []).length;
-  const educationMatchScore = educationCount > 0 ? 100 : 50;
-
-  // Role Alignment Score (Target Role Alignment)
-  let roleAlignmentScore = 70;
-  const targetRoleClean = (context?.targetRole || "").toLowerCase().trim();
-  if (targetRoleClean) {
-    const roleTokens = targetRoleClean.split(/[\s/-]+/).filter(w => w.length > 2 && !["the", "and", "for", "with"].includes(w));
-    let tokenMatches = 0;
-    const resumeTextLower = resumeCorpus.toLowerCase();
-    for (const token of roleTokens) {
-      if (resumeTextLower.includes(token)) {
-        tokenMatches++;
-      }
+  // 2. Meaningful Keyword Coverage (Anti-Stuffing, Stop-Word Filtered)
+  const meaningfulJobKeywords = new Set<string>();
+  for (const req of frozenRequirements) {
+    const reqLower = req.name.toLowerCase().trim();
+    if (reqLower.length >= 2 && !STOP_WORDS.has(reqLower)) {
+      meaningfulJobKeywords.add(reqLower);
     }
-    const tokenRatio = roleTokens.length > 0 ? tokenMatches / roleTokens.length : 0.7;
-    roleAlignmentScore = Math.min(100, Math.round(50 + (tokenRatio * 50)));
+    const canonLower = req.canonicalName.toLowerCase().trim();
+    if (canonLower.length >= 2 && !STOP_WORDS.has(canonLower)) {
+      meaningfulJobKeywords.add(canonLower);
+    }
+  }
+  if (context?.jobDescription) {
+    const jdTokens = context.jobDescription
+      .toLowerCase()
+      .split(/[\s,./;:!?"'()\[\]{}#+]+/)
+      .filter(w => w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w));
+    for (const t of jdTokens) {
+      meaningfulJobKeywords.add(t);
+    }
   }
 
-  // Resume Structure & Quality Score
-  let structureScore = 50;
-  if (parsedResume.contactInfo?.email) structureScore += 10;
+  let keywordsMatched = 0;
+  const resumeLower = resumeCorpus.toLowerCase();
+  for (const kw of meaningfulJobKeywords) {
+    if (kw.includes(" ") || kw.includes("+") || kw.includes("#") || kw.includes(".")) {
+      if (resumeLower.includes(kw)) {
+        keywordsMatched++;
+      }
+    } else {
+      const regex = new RegExp(`\\b${escapeRegExp(kw)}\\b`, "i");
+      if (regex.test(resumeLower)) {
+        keywordsMatched++;
+      }
+    }
+  }
+  const keywordsTotal = meaningfulJobKeywords.size;
+  const keywordPercentage = keywordsTotal > 0 ? (keywordsMatched / keywordsTotal) * 100 : 100;
+
+  // 3. Experience Match (Evaluated Separately; Zero Penalty if Omitted in JD)
+  let isExperienceRequired = false;
+  let requiredYears = 0;
+  const jdText = (context?.jobDescription || "").toLowerCase();
+  const expLevelText = (context?.experienceLevel || "").toLowerCase();
+
+  const yearsMatch = jdText.match(/\b(\d+)\+?\s*(?:to\s*(\d+)\s*)?years?\b/i) ||
+                     expLevelText.match(/\b(\d+)\+?\s*(?:to\s*(\d+)\s*)?years?\b/i);
+
+  if (yearsMatch) {
+    isExperienceRequired = true;
+    requiredYears = parseInt(yearsMatch[1], 10);
+  } else if (expLevelText.includes("senior") || jdText.includes("senior")) {
+    isExperienceRequired = true;
+    requiredYears = 5;
+  } else if (expLevelText.includes("lead") || jdText.includes("lead") || expLevelText.includes("principal")) {
+    isExperienceRequired = true;
+    requiredYears = 7;
+  } else if (expLevelText.includes("mid") || expLevelText.includes("3-5")) {
+    isExperienceRequired = true;
+    requiredYears = 3;
+  } else if (expLevelText.includes("1-2") || expLevelText.includes("junior")) {
+    isExperienceRequired = true;
+    requiredYears = 1;
+  }
+
+  let candidateYears = 0;
+  if (Array.isArray(parsedResume.experience) && parsedResume.experience.length > 0) {
+    for (const exp of parsedResume.experience) {
+      const dur = String(exp.duration || "").toLowerCase();
+      const yearMatches = dur.match(/\b(19\d\d|20\d\d)\b/g);
+      if (yearMatches && yearMatches.length >= 2) {
+        const y1 = parseInt(yearMatches[0], 10);
+        const y2 = parseInt(yearMatches[1], 10);
+        candidateYears += Math.max(1, Math.abs(y2 - y1));
+      } else if (yearMatches && yearMatches.length === 1 && (dur.includes("present") || dur.includes("current"))) {
+        const y1 = parseInt(yearMatches[0], 10);
+        candidateYears += Math.max(1, 2026 - y1);
+      } else {
+        candidateYears += 1.5;
+      }
+    }
+  }
+
+  let experienceMatchScore = 100;
+  if (isExperienceRequired && requiredYears > 0) {
+    if (candidateYears >= requiredYears) {
+      experienceMatchScore = 100;
+    } else {
+      experienceMatchScore = Math.max(25, Math.round((candidateYears / requiredYears) * 100));
+      missingItems.push({
+        id: `exp_gap_${requiredYears}`,
+        type: "Experience",
+        title: `${requiredYears}+ Years Experience Required`,
+        importance: requiredYears >= 5 ? "Critical" : "Recommended",
+        reason: `Target role specifies ${requiredYears}+ years of relevant experience. Resume demonstrates approximately ${Math.round(candidateYears * 10) / 10} years.`,
+        suggestedAddition: `If you have prior professional, contracting, or internship experience, make sure all roles and dates are documented.`,
+        atsImpact: requiredYears >= 5 ? "High" : "Medium",
+        recruiterImpact: "High",
+        confidenceScore: 90,
+        gapClassification: candidateYears >= requiredYears * 0.7 ? "MISSING_ADDABLE" : "TRUE_GAP",
+        priorityTier: requiredYears >= 5 ? "CRITICAL" : "HIGH_IMPACT",
+        evidenceFound: candidateYears > 0 ? `${Math.round(candidateYears * 10) / 10} years verified in experience section.` : "No formal work experience duration found.",
+        recommendedAction: `Ensure all relevant past experience is documented. Do not fabricate experience years.`
+      });
+    }
+  }
+
+  // 4. Education Match (Evaluated ONLY when JD explicitly requires it)
+  const educationRegex = /\b(bachelor'?s?|b\.?s\.?|master'?s?|m\.?s\.?|ph\.?d\.?|degree in|computer science degree|engineering degree)\b/i;
+  const isEducationRequired = Boolean(context?.jobDescription && educationRegex.test(context.jobDescription));
+  const candidateHasEducation = Array.isArray(parsedResume.education) && parsedResume.education.length > 0;
+
+  let educationMatchScore = 100;
+  if (isEducationRequired) {
+    educationMatchScore = candidateHasEducation ? 100 : 40;
+    if (!candidateHasEducation) {
+      missingItems.push({
+        id: "edu_gap_degree",
+        type: "Achievement",
+        title: "Degree or Equivalent Academic Qualification",
+        importance: "Recommended",
+        reason: "Job description explicitly lists an academic degree as a requirement.",
+        suggestedAddition: "If you hold a degree or completed relevant coursework, ensure your education section lists institution and degree name.",
+        atsImpact: "Medium",
+        recruiterImpact: "Medium",
+        confidenceScore: 90,
+        gapClassification: "TRUE_GAP",
+        priorityTier: "MEDIUM_IMPACT",
+        evidenceFound: "No formal degree parsed in resume education.",
+        recommendedAction: "Add genuine degree or coursework credentials if completed."
+      });
+    }
+  }
+
+  // 5. Role Alignment Score (Title & Domain Match)
+  let roleAlignmentScore = 75;
+  const targetRoleClean = (context?.targetRole || "").toLowerCase().trim();
+  if (targetRoleClean) {
+    const genericRoleWords = new Set(["senior", "junior", "lead", "staff", "associate", "principal", "intern", "developer", "engineer", "specialist", "analyst", "the", "and", "for", "with", "at", "in"]);
+    const domainTokens = targetRoleClean.split(/[\s/-]+/).filter(w => w.length > 2 && !genericRoleWords.has(w));
+
+    const resumeTitles = (parsedResume.experience || []).map(e => (e.role || "").toLowerCase()).join(" ");
+    const resumeSummary = (parsedResume.summary || "").toLowerCase();
+    const resumeFullRoles = `${resumeTitles} ${resumeSummary}`;
+
+    if (domainTokens.length > 0) {
+      let domainMatches = 0;
+      for (const dt of domainTokens) {
+        if (resumeFullRoles.includes(dt)) {
+          domainMatches++;
+        }
+      }
+      const ratio = domainMatches / domainTokens.length;
+      roleAlignmentScore = Math.min(100, Math.round(35 + (ratio * 65)));
+    } else {
+      const hasTechTitle = resumeTitles.includes("engineer") || resumeTitles.includes("developer") || resumeTitles.includes("programmer");
+      roleAlignmentScore = hasTechTitle ? 90 : 65;
+    }
+  }
+
+  // 6. Resume Structure & Quality Score
+  let structureScore = 40;
+  if (parsedResume.contactInfo?.email) structureScore += 20;
   if (parsedResume.contactInfo?.phone || parsedResume.contactInfo?.location) structureScore += 10;
-  if (experienceCount > 0) structureScore += 15;
-  if (educationCount > 0) structureScore += 10;
+  if (Array.isArray(parsedResume.experience) && parsedResume.experience.length > 0) structureScore += 15;
+  if (Array.isArray(parsedResume.education) && parsedResume.education.length > 0) structureScore += 10;
   if ((parsedResume.skills || []).length >= 5) structureScore += 5;
   const resumeStructureScore = Math.min(100, structureScore);
 
-  // ATS Compatibility Score calculation
+  // 7. Dynamic Weight Distribution (No Penalties for Omitted Requirements)
+  let wRequired = 0.40;
+  let wRoleAlignment = 0.20;
+  let wKeywords = 0.15;
+  let wExperience = isExperienceRequired ? 0.10 : 0.00;
+  let wPreferred = 0.10;
+  let wStructure = 0.05;
+  let wEducation = isEducationRequired ? 0.05 : 0.00;
+
+  const totalDynamicWeight = wRequired + wRoleAlignment + wKeywords + wExperience + wPreferred + wStructure + wEducation;
+  wRequired = Math.round((wRequired / totalDynamicWeight) * 100) / 100;
+  wRoleAlignment = Math.round((wRoleAlignment / totalDynamicWeight) * 100) / 100;
+  wKeywords = Math.round((wKeywords / totalDynamicWeight) * 100) / 100;
+  wExperience = Math.round((wExperience / totalDynamicWeight) * 100) / 100;
+  wPreferred = Math.round((wPreferred / totalDynamicWeight) * 100) / 100;
+  wStructure = Math.round((wStructure / totalDynamicWeight) * 100) / 100;
+  wEducation = Math.round((wEducation / totalDynamicWeight) * 100) / 100;
+
+  const sumDynamicWeights = wRequired + wRoleAlignment + wKeywords + wExperience + wPreferred + wStructure + wEducation;
+  if (sumDynamicWeights !== 1.0) {
+    wRequired = Math.round((wRequired + (1.0 - sumDynamicWeights)) * 100) / 100;
+  }
+
+  // 8. Raw ATS Compatibility Score & Realistic Critical Gap Capping
   const rawAtsScore = 
-    (requiredPercentage * ATS_WEIGHTS.REQUIRED) +
-    (preferredPercentage * ATS_WEIGHTS.PREFERRED) +
-    (keywordPercentage * ATS_WEIGHTS.KEYWORDS) +
-    (experienceMatchScore * ATS_WEIGHTS.EXPERIENCE) +
-    (roleAlignmentScore * ATS_WEIGHTS.ROLE_ALIGNMENT) +
-    (resumeStructureScore * ATS_WEIGHTS.STRUCTURE) -
-    (criticalGaps.length * ATS_WEIGHTS.CRITICAL_GAP_PENALTY);
+    (requiredPercentage * wRequired) +
+    (preferredPercentage * wPreferred) +
+    (keywordPercentage * wKeywords) +
+    (experienceMatchScore * wExperience) +
+    (roleAlignmentScore * wRoleAlignment) +
+    (educationMatchScore * wEducation) +
+    (resumeStructureScore * wStructure);
 
-  const atsScore = Math.max(0, Math.min(100, Math.round(rawAtsScore)));
+  let maxScoreCap = 100;
+  if (criticalGaps.length === 1) {
+    maxScoreCap = 75;
+  } else if (criticalGaps.length === 2) {
+    maxScoreCap = 60;
+  } else if (criticalGaps.length >= 3) {
+    maxScoreCap = 45;
+  }
 
-  // Target Match Score (Candidate Alignment)
+  const atsScore = Math.max(0, Math.min(maxScoreCap, Math.round(rawAtsScore)));
+
+  // 9. Target Match Score (Candidate Profile Alignment)
   const rawTargetMatch = 
     (requiredPercentage * 0.45) +
     (preferredPercentage * 0.25) +
@@ -621,41 +814,53 @@ export function evaluateResumeAgainstRequirements(
   const scoreBreakdownDetails: ScoreBreakdownDetails = {
     requiredSkills: {
       score: Math.round(requiredPercentage),
-      weight: ATS_WEIGHTS.REQUIRED * 100,
+      weight: Number(wRequired.toFixed(3)),
       matched: requiredMatched,
       total: requiredTotal,
       explanation: `${requiredMatched} of ${requiredTotal} mandatory skills verified with resume evidence.`
     },
     preferredSkills: {
       score: Math.round(preferredPercentage),
-      weight: ATS_WEIGHTS.PREFERRED * 100,
+      weight: Number(wPreferred.toFixed(3)),
       matched: preferredMatched,
       total: preferredTotal,
       explanation: `${preferredMatched} of ${preferredTotal} preferred qualifications supported.`
     },
     keywordCoverage: {
       score: Math.round(keywordPercentage),
-      weight: ATS_WEIGHTS.KEYWORDS * 100,
+      weight: Number(wKeywords.toFixed(3)),
       matched: keywordsMatched,
       total: keywordsTotal,
-      explanation: `${keywordsMatched} of ${keywordsTotal} technical keywords and tools matched.`
+      explanation: `${keywordsMatched} of ${keywordsTotal} meaningful job keywords and concepts covered.`
     },
     experienceMatch: {
       score: Math.round(experienceMatchScore),
-      weight: ATS_WEIGHTS.EXPERIENCE * 100,
-      explanation: experienceCount > 0 ? `${experienceCount} verified work experience roles.` : "Entry-level / project-weighted evaluation."
+      weight: Number(wExperience.toFixed(3)),
+      isRequired: isExperienceRequired,
+      explanation: isExperienceRequired 
+        ? (candidateYears >= requiredYears ? `${Math.round(candidateYears * 10) / 10} years verified (meets ${requiredYears}+ yrs requirement).` : `${Math.round(candidateYears * 10) / 10} years verified (less than ${requiredYears}+ yrs required).`)
+        : "No explicit years-of-experience requirement specified in job posting."
     },
     roleAlignment: {
       score: roleAlignmentScore,
-      weight: ATS_WEIGHTS.ROLE_ALIGNMENT * 100,
-      explanation: `Resume vocabulary aligns ${roleAlignmentScore}% with "${context?.targetRole || 'Target Role'}" job profiles.`
+      weight: Number(wRoleAlignment.toFixed(3)),
+      explanation: `Resume experience and title alignment scores ${roleAlignmentScore}% for "${context?.targetRole || 'Target Role'}" profiles.`
     },
     resumeStructure: {
       score: resumeStructureScore,
-      weight: ATS_WEIGHTS.STRUCTURE * 100,
-      explanation: "Evaluates contact completeness, section headers, timeline clarity, and parsing legibility."
+      weight: Number(wStructure.toFixed(3)),
+      explanation: "Evaluates contact information, standard section headers, chronological timeline, and text parsing readability."
     },
-    criticalGapPenalty: criticalGaps.length * ATS_WEIGHTS.CRITICAL_GAP_PENALTY
+    educationMatch: {
+      score: Math.round(educationMatchScore),
+      weight: Number(wEducation.toFixed(3)),
+      isRequired: isEducationRequired,
+      explanation: isEducationRequired 
+        ? (candidateHasEducation ? "Verified academic degree/coursework credential found." : "Job description explicitly lists degree requirement; none found in resume.")
+        : "Job posting does not mandate a specific degree requirement; zero penalty applied."
+    },
+    criticalGapPenalty: criticalGaps.length * 10,
+    criticalGapCap: maxScoreCap
   };
 
   return {

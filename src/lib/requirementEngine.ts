@@ -83,6 +83,8 @@ const ALIAS_MAP: Record<string, string> = {
   "go": "Go",
   "rust-lang": "Rust",
   "rust": "Rust",
+  "java": "Java",
+  "c": "C",
   "c++": "C++",
   "cpp": "C++",
   "c#": "C#",
@@ -131,7 +133,14 @@ const ALIAS_MAP: Record<string, string> = {
 
 // Explicit Pairs that are known to be distinct and must never match implicitly
 const DISTINCT_TECH_PAIRS: [string, string][] = [
+  ["java", "javascript"],
+  ["c", "c++"],
+  ["c", "c#"],
+  ["c++", "c#"],
   ["python", "django"],
+  ["aws", "azure"],
+  ["aws", "gcp"],
+  ["azure", "gcp"],
   ["javascript", "react"],
   ["javascript", "node.js"],
   ["typescript", "angular"],
