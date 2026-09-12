@@ -61,15 +61,36 @@ async function safeFetchJson(
 ): Promise<{ res: Response; json: any }> {
   const res = await fetch(url, options);
   const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(
-      `The server returned an unexpected response (HTTP ${res.status}). ` +
-        "Please ensure the application server is running correctly and retry."
-    );
+  let json: any = null;
+  if (text && text.trim()) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null;
+    }
   }
+
+  if (!json || typeof json !== "object") {
+    const errorMsg = res.ok
+      ? "Invalid server response format."
+      : text && text.length < 200 && !text.includes("<") && !text.includes("<!DOCTYPE")
+      ? text.trim()
+      : `The server returned an error (HTTP ${res.status}). Please verify that the application server is running and retry.`;
+    
+    return {
+      res,
+      json: {
+        success: false,
+        code: res.status >= 500 ? "INTERNAL_SERVER_ERROR" : "INVALID_RESPONSE",
+        error: {
+          code: res.status >= 500 ? "INTERNAL_SERVER_ERROR" : "INVALID_RESPONSE",
+          message: errorMsg
+        },
+        message: errorMsg
+      }
+    };
+  }
+
   return { res, json };
 }
 

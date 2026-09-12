@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "auth_toggle_flow",
+  "projectId": "react-example-f4fb0b21",
+  "createdAt": 1789222134505,
+  "steps": [
+    {
+      "tool": "reticle_act",
+      "anchor": {
+        "kind": "role",
+        "role": "button",
+        "name": "create an account"
+      },
+      "args": {},
+      "action": "click"
+    }
+  ],
+  "startPath": "/",
+  "intent": "Switch authentication view from sign in to registration mode when clicking create an account",
+  "intentId": "flow:auth_toggle_flow"
+}

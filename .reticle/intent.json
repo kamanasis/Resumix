@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "intents": {
+    "auth-page-render": {
+      "id": "auth-page-render",
+      "statement": "The application renders authentication controls including sign-in email input, password input, and submit buttons",
+      "state": "proved",
+      "declaredAt": 1789222068518,
+      "binding": {
+        "kind": "text",
+        "contains": "Create Account"
+      },
+      "surface": {
+        "files": [
+          "src/components/AuthPage.tsx"
+        ]
+      },
+      "provenBy": {
+        "verdictId": "reticle_assert:1789222115722",
+        "grade": "presence",
+        "at": 1789222115722
+      }
+    },
+    "auth-toggle-mode": {
+      "id": "auth-toggle-mode",
+      "statement": "Clicking create an account switches the auth view between sign in and sign up modes",
+      "state": "proved",
+      "declaredAt": 1789222068518,
+      "binding": {
+        "kind": "text",
+        "contains": "Already have an account?"
+      },
+      "surface": {
+        "files": [
+          "src/components/AuthPage.tsx"
+        ]
+      },
+      "provenBy": {
+        "verdictId": "reticle_act_and_wait:1789222096705",
+        "grade": "presence",
+        "at": 1789222096705
+      }
+    },
+    "flow:auth_toggle_flow": {
+      "id": "flow:auth_toggle_flow",
+      "statement": "Switch authentication view from sign in to registration mode when clicking create an account",
+      "state": "declared",
+      "declaredAt": 1789222134506,
+      "surface": {
+        "flow": "auth_toggle_flow"
+      }
+    }
+  }
+}

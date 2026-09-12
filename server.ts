@@ -73,7 +73,7 @@ function sendError(res: express.Response, code: string, message: string, status 
 }
 
 // Canonical Gemini Model configuration (overridable via process.env.GEMINI_MODEL)
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
 /**
  * Resilient AI content generator with quota failover support across compatible Gemini models.
@@ -81,10 +81,11 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 async function generateAiContent(ai: GoogleGenAI, options: any) {
   const models = [
     process.env.GEMINI_MODEL,
-    "gemini-2.5-flash",
-    "gemini-3-flash-preview",
-    "gemini-flash-latest"
-  ].filter((m, idx, arr) => Boolean(m && m.trim()) && arr.indexOf(m) === idx) as string[];
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-latest",
+    "gemini-2.5-flash"
+  ].filter((m, idx, arr): m is string => Boolean(m && m.trim()) && arr.indexOf(m) === idx);
 
   let lastError: any;
   for (const model of models) {
@@ -96,14 +97,17 @@ async function generateAiContent(ai: GoogleGenAI, options: any) {
     } catch (err: any) {
       lastError = err;
       const msg = err?.message || String(err);
-      const isQuotaOrDemand =
+      const isRecoverable =
         err?.status === 429 ||
         err?.status === 503 ||
+        err?.status === 404 ||
         msg.includes("RESOURCE_EXHAUSTED") ||
         msg.includes("UNAVAILABLE") ||
-        msg.includes("high demand");
+        msg.includes("high demand") ||
+        msg.includes("not_found") ||
+        msg.includes("is not found");
 
-      if (isQuotaOrDemand && model !== models[models.length - 1]) {
+      if (isRecoverable && model !== models[models.length - 1]) {
         console.warn(`Gemini model ${model} unavailable/rate-limited, trying failover model...`);
         continue;
       }
@@ -1027,10 +1031,10 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
 
     let result: any;
     try {
-      result = JSON.parse(responseText);
+      result = extractJsonFromAiResponse(responseText);
     } catch (parseError) {
       console.error("AI returned malformed JSON:", responseText);
-      return sendError(res, "AI_INVALID_RESPONSE", "The AI provider returned an invalid requirement profile.", 502);
+      return sendError(res, "AI_MALFORMED_RESPONSE", "The AI provider returned an invalid requirement profile.", 502);
     }
 
     if (!validateRequirementProfile(result)) {
@@ -1086,7 +1090,7 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
   } catch (error: any) {
     console.error("Error in /api/generate-requirement-profile:", error);
     const classified = classifyAiError(error);
-    if (classified.code !== "AI_PROVIDER_ERROR") {
+    if (error?.status || classified.code !== "AI_PROVIDER_ERROR") {
       return sendError(res, classified.code, classified.message, classified.httpStatus);
     }
     return sendError(res, "INTERNAL_SERVER_ERROR", "Failed to generate requirement profile.", 500, error.message || String(error));
