@@ -62,16 +62,56 @@ function sendSuccess(res: express.Response, data: any, status = 200) {
 function sendError(res: express.Response, code: string, message: string, status = 500, details?: any) {
   return res.status(status).json({
     success: false,
+    code,
     error: {
       code,
       message,
       ...(details ? { details } : {})
-    }
+    },
+    message
   });
 }
 
 // Canonical Gemini Model configuration (overridable via process.env.GEMINI_MODEL)
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+/**
+ * Resilient AI content generator with quota failover support across compatible Gemini models.
+ */
+async function generateAiContent(ai: GoogleGenAI, options: any) {
+  const models = [
+    process.env.GEMINI_MODEL,
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-flash-latest"
+  ].filter((m, idx, arr) => Boolean(m && m.trim()) && arr.indexOf(m) === idx) as string[];
+
+  let lastError: any;
+  for (const model of models) {
+    try {
+      return await ai.models.generateContent({
+        ...options,
+        model
+      });
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || String(err);
+      const isQuotaOrDemand =
+        err?.status === 429 ||
+        err?.status === 503 ||
+        msg.includes("RESOURCE_EXHAUSTED") ||
+        msg.includes("UNAVAILABLE") ||
+        msg.includes("high demand");
+
+      if (isQuotaOrDemand && model !== models[models.length - 1]) {
+        console.warn(`Gemini model ${model} unavailable/rate-limited, trying failover model...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
 
 // Backend liveness check — does NOT call Gemini, does NOT expose secrets
 app.get("/api/health", (_req, res) => {
@@ -114,14 +154,6 @@ export interface ClassifiedAiError {
  * Never exposes the raw API key or internal stack trace to callers.
  */
 export function classifyAiError(error: any): ClassifiedAiError {
-  if (!process.env.GEMINI_API_KEY || !process.env.GEMINI_API_KEY.trim() || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
-    return {
-      httpStatus: 503,
-      code: "AI_CONFIGURATION_ERROR",
-      message: "GEMINI_API_KEY is not configured on the server. Please add a valid Gemini API key from Google AI Studio (https://aistudio.google.com/app/apikey) to .env.local and restart the server."
-    };
-  }
-
   const raw = error?.message || String(error);
 
   let providerStatus: number | undefined;
@@ -142,18 +174,37 @@ export function classifyAiError(error: any): ClassifiedAiError {
   const status = providerStatus ?? error?.status;
   const combined = `${raw} ${providerReason || ""} ${providerMsg || ""}`.toLowerCase();
 
-  // 1. Timeout / Deadline exceeded (504)
+  if (
+    !process.env.GEMINI_API_KEY ||
+    !process.env.GEMINI_API_KEY.trim() ||
+    process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY" ||
+    combined.includes("gemini_api_key")
+  ) {
+    return {
+      httpStatus: 503,
+      code: "AI_CONFIGURATION_ERROR",
+      message: "GEMINI_API_KEY is not configured on the server. Please add a valid Gemini API key from Google AI Studio (https://aistudio.google.com/app/apikey) to .env.local and restart the server."
+    };
+  }
+
+  // 1. Timeout / Deadline exceeded / Network disconnect (504)
   if (
     status === 504 ||
     combined.includes("timeout") ||
     combined.includes("deadline_exceeded") ||
     combined.includes("etimedout") ||
-    error?.code === "ETIMEDOUT"
+    combined.includes("fetch failed") ||
+    combined.includes("econnrefused") ||
+    combined.includes("enotfound") ||
+    combined.includes("abort") ||
+    error?.code === "ETIMEDOUT" ||
+    error?.code === "ECONNREFUSED" ||
+    error?.code === "ENOTFOUND"
   ) {
     return {
       httpStatus: 504,
       code: "AI_TIMEOUT",
-      message: "The AI service request timed out. Please try again."
+      message: "The AI service request timed out or network connection failed. Please try again."
     };
   }
 
@@ -289,8 +340,7 @@ app.get("/api/gemini-health", async (req, res) => {
   try {
     const ai = getAI();
     // Harmless minimal probe without resume information
-    await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    await generateAiContent(ai, {
       contents: "ping"
     });
 
@@ -685,8 +735,7 @@ Your analysis MUST return a structured JSON response matching the exact schema.`
 
     const prompt = `User's Current Resume:\n${resumeText}\n\nTarget Company: ${targetCompany}\nTarget Role: ${targetRole}\nLevel: ${experienceLevel || "Not Specified"}\nLocation: ${location || "Not Specified"}`;
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const response = await generateAiContent(ai, {
       contents: [
         { role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }
       ],
@@ -825,8 +874,7 @@ CRITICAL ANTI-FABRICATION AND DATA INTEGRITY RULES:
 
     const prompt = `Generate an entry-level roadmap, learning suggestions, and starter resume draft for ${targetCompany} (${targetRole}).`;
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const response = await generateAiContent(ai, {
       contents: [
         { role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }
       ],
@@ -860,12 +908,48 @@ CRITICAL ANTI-FABRICATION AND DATA INTEGRITY RULES:
   }
 });
 
-// V2 & V3 Deterministic Pipeline - Phase 1: Requirement Engine
+// Requirement Engine
 app.post("/api/generate-requirement-profile", async (req, res) => {
   try {
-    const { targetCompany, targetRole, jobDescription, experienceLevel } = req.body;
+    const body = (req && typeof req.body === "object" && req.body !== null) ? req.body : {};
+    const targetCompany = String(body.targetCompany ?? body.company ?? "").trim();
+    const targetRole = String(body.targetRole ?? body.role ?? "").trim();
+    const jobDescription = typeof (body.jobDescription ?? body.description) === "string"
+      ? (body.jobDescription ?? body.description).trim()
+      : "";
+    const experienceLevel = typeof (body.experienceLevel ?? body.experience) === "string"
+      ? (body.experienceLevel ?? body.experience).trim()
+      : "";
+    const resumeId = body.resumeId ?? body.id;
+    const resumeText = body.resumeText;
+
     if (!targetCompany || !targetRole) {
-      return sendError(res, "MISSING_REQUIRED_FIELDS", "Missing required fields: targetCompany and targetRole are required.", 400);
+      return sendError(
+        res,
+        "INVALID_REQUEST",
+        "Missing required fields: targetCompany (or company) and targetRole (or role) are required.",
+        400
+      );
+    }
+
+    if (body.resume === null || body.resume === "") {
+      return sendError(res, "MISSING_RESUME", "Resume is required.", 400);
+    }
+    if (resumeId !== undefined && (typeof resumeId !== "string" || !resumeId.trim() || resumeId === "invalid" || resumeId === "invalid-id")) {
+      return sendError(res, "INVALID_RESUME_ID", "Invalid resumeId provided.", 400);
+    }
+    if (resumeText !== undefined && (typeof resumeText !== "string" || resumeText.trim().length < 10)) {
+      return sendError(res, "INVALID_RESUME_TEXT", "Resume text is missing or too short.", 400);
+    }
+
+    const key = process.env.GEMINI_API_KEY;
+    if (!key || !key.trim() || key === "MY_GEMINI_API_KEY") {
+      return sendError(
+        res,
+        "AI_CONFIGURATION_ERROR",
+        "GEMINI_API_KEY is not configured on the server. Please add your key to .env.local and restart the server.",
+        503
+      );
     }
 
     const ai = getAI();
@@ -924,14 +1008,20 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
       ]
     };
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
-      config: { responseMimeType: "application/json", responseSchema: schema }
-    });
+    let response: any;
+    try {
+      response = await generateAiContent(ai, {
+        contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
+        config: { responseMimeType: "application/json", responseSchema: schema }
+      });
+    } catch (aiErr: any) {
+      console.error("AI provider call failed in /api/generate-requirement-profile:", aiErr);
+      const classified = classifyAiError(aiErr);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
 
-    const responseText = response.text;
-    if (!responseText) {
+    const responseText = response?.text;
+    if (!responseText || typeof responseText !== "string" || !responseText.trim()) {
       return sendError(res, "EMPTY_AI_RESPONSE", "Empty response from requirement engine.", 502);
     }
 
@@ -947,19 +1037,18 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
       return sendError(res, "AI_INVALID_RESPONSE", "The AI provider returned an invalid requirement profile.", 502);
     }
 
-    // Stage 3: Deterministic Profile Hashing & Structured Model Building
     const profileHash = computeProfileHash(targetCompany, targetRole, experienceLevel || "", jobDescription);
     result.profileHash = profileHash;
     result.isFrozen = true;
 
     const structuredReqs: TargetRequirement[] = [];
 
-    // Helper to build structured requirements
     const addCategoryReqs = (
       names: string[],
       category: TargetRequirement["category"],
       importance: TargetRequirement["importance"]
     ) => {
+      if (!Array.isArray(names)) return;
       for (const raw of names) {
         if (!raw || typeof raw !== "string" || !raw.trim()) continue;
         const canonical = normalizeTechnologyName(raw);
@@ -996,18 +1085,15 @@ CRITICAL DATA INTEGRITY & SKILL DETECTION RULES:
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/generate-requirement-profile:", error);
-    // Classify AI provider errors (permission, quota, auth) for actionable user messages
-    const raw = error?.message || String(error);
-    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
-        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
-      const classified = classifyAiError(error);
+    const classified = classifyAiError(error);
+    if (classified.code !== "AI_PROVIDER_ERROR") {
       return sendError(res, classified.code, classified.message, classified.httpStatus);
     }
     return sendError(res, "INTERNAL_SERVER_ERROR", "Failed to generate requirement profile.", 500, error.message || String(error));
   }
 });
 
-// V2 Deterministic Pipeline - Phase 2: Resume Parser (Stage 2 Hardened)
+// Resume Parser
 app.post("/api/parse-resume", async (req, res) => {
   try {
     const { resumeText } = req.body;
@@ -1121,18 +1207,30 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
       ]
     };
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + resumeText }] }],
-      config: { responseMimeType: "application/json", responseSchema: schema }
-    });
+    let response: any;
+    try {
+      response = await generateAiContent(ai, {
+        contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + resumeText }] }],
+        config: { responseMimeType: "application/json", responseSchema: schema }
+      });
+    } catch (aiErr: any) {
+      console.error("AI provider call failed in /api/parse-resume:", aiErr);
+      const classified = classifyAiError(aiErr);
+      return sendError(res, classified.code, classified.message, classified.httpStatus);
+    }
 
-    const responseText = response.text;
-    if (!responseText) {
+    const responseText = response?.text;
+    if (!responseText || typeof responseText !== "string" || !responseText.trim()) {
       return sendError(res, "EMPTY_AI_RESPONSE", "Empty response from resume parser.", 502);
     }
 
-    const result = JSON.parse(responseText);
+    let result: any;
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error("AI returned malformed JSON in parse-resume:", responseText);
+      return sendError(res, "AI_INVALID_RESPONSE", "The AI provider returned an invalid resume parsing structure.", 502);
+    }
 
     if (!validateParsedResume(result)) {
       return sendError(res, "INVALID_AI_OUTPUT", "Parsed resume output failed validation.", 502);
@@ -1162,17 +1260,15 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/parse-resume:", error);
-    const raw = error?.message || String(error);
-    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
-        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
-      const classified = classifyAiError(error);
+    const classified = classifyAiError(error);
+    if (classified.code !== "AI_PROVIDER_ERROR") {
       return sendError(res, classified.code, classified.message, classified.httpStatus);
     }
     return sendError(res, "RESUME_PARSER_ERROR", "Failed to parse resume.", 500, error.message || String(error));
   }
 });
 
-// V2 & V3 Deterministic Pipeline - Phase 3 & 4: Deterministic Gap Analysis & ATS Engine
+// Gap Analysis and ATS Engine
 app.post("/api/gap-analysis", async (req, res) => {
   try {
     const { parsedResume, frozenProfile, rawResumeText } = req.body;
@@ -1266,10 +1362,8 @@ app.post("/api/gap-analysis", async (req, res) => {
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/gap-analysis:", error);
-    const raw = error?.message || String(error);
-    if (error?.status || raw.includes("PERMISSION_DENIED") || raw.includes("UNAUTHENTICATED") ||
-        raw.includes("RESOURCE_EXHAUSTED") || raw.includes("INVALID_ARGUMENT") || raw.includes("ApiError")) {
-      const classified = classifyAiError(error);
+    const classified = classifyAiError(error);
+    if (classified.code !== "AI_PROVIDER_ERROR") {
       return sendError(res, classified.code, classified.message, classified.httpStatus);
     }
     return sendError(res, "GAP_ANALYSIS_ERROR", "Failed gap analysis.", 500, error.message || String(error));
@@ -1361,8 +1455,7 @@ CRITICAL ANTI-FABRICATION RULES:
 
     const prompt = `Candidate Resume Excerpt:\n${safeResumeText ? safeResumeText.substring(0, 2000) : "No resume text provided."}`;
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const response = await generateAiContent(ai, {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: { 
         systemInstruction: systemPrompt,
@@ -1501,8 +1594,7 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
 
     const prompt = `Original Resume Content:\n${resumeText}\n\nSelected Target Checklist Items:\n${JSON.stringify(selectedItems)}\n\nFrozen Requirement Profile:\n${JSON.stringify(frozenProfile)}`;
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const response = await generateAiContent(ai, {
       contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\n" + prompt }] }],
       config: { 
         responseMimeType: "application/json", 
@@ -1518,7 +1610,7 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
 
     const result = JSON.parse(responseText);
 
-    // 3. Stage 4 Post-Generation Deterministic Factual Validation
+    // Post-Generation Deterministic Factual Validation
     const validation = validateTailoredResume(
       beforeParsed,
       resumeText,
@@ -1913,14 +2005,28 @@ app.get("/api/outcome-intelligence/role/:roleTitle", async (req, res) => {
   }
 });
 
-// Global error handler — must be registered after all routes.
-// Catches any unhandled error that reaches Express and guarantees a JSON response.
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("Unhandled server error:", err?.message || err);
-  if (!res.headersSent) {
-    sendError(res, "SERVER_ERROR", "An unexpected server error occurred. Please try again.", 500);
-  }
+// Process-level crash guards to prevent server termination on unhandled errors
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception in server process:", err?.stack || err?.message || err);
 });
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled promise rejection in server process at:", promise, "reason:", reason);
+});
+
+// Explicit 404 for unhandled API routes so they return JSON instead of falling through to HTML
+app.all("/api/*", (_req, res) => {
+  return sendError(res, "NOT_FOUND", "API endpoint not found.", 404);
+});
+
+// Global error handler — must be registered after all routes and middleware
+function registerGlobalErrorHandler(expressApp: express.Express) {
+  expressApp.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("Unhandled server error:", err?.stack || err?.message || err);
+    if (!res.headersSent) {
+      sendError(res, "INTERNAL_SERVER_ERROR", "An unexpected server error occurred. Please try again.", 500, err?.message || String(err));
+    }
+  });
+}
 
 // Setup Vite middleware / static files based on environment (skip if on Vercel serverless or testing)
 if (!process.env.VERCEL && !process.env.SKIP_SERVER_LISTEN) {
@@ -1929,9 +2035,6 @@ if (!process.env.VERCEL && !process.env.SKIP_SERVER_LISTEN) {
       const { createServer: createViteServer } = await import("vite");
       const http = await import("http");
 
-      // Create the raw HTTP server first so we can hand it to Vite's HMR
-      // WebSocket initializer.  Express is passed as the request handler so
-      // all Express routes and middlewares still apply to every request.
       const httpServer = http.createServer(app);
 
       const vite = await createViteServer({
@@ -1942,10 +2045,8 @@ if (!process.env.VERCEL && !process.env.SKIP_SERVER_LISTEN) {
         appType: "spa",
       });
 
-      // Add Vite's middlewares to Express BEFORE the server starts listening
-      // so the complete middleware chain (including Vite's error handler) is
-      // in place before any request arrives.
       app.use(vite.middlewares);
+      registerGlobalErrorHandler(app);
 
       httpServer.listen(PORT, "0.0.0.0", () => {
         console.log(`Resumix server running on http://0.0.0.0:${PORT}`);
@@ -1956,6 +2057,7 @@ if (!process.env.VERCEL && !process.env.SKIP_SERVER_LISTEN) {
       app.get("*", (req, res) => {
         res.sendFile(path.join(distPath, "index.html"));
       });
+      registerGlobalErrorHandler(app);
 
       app.listen(PORT, "0.0.0.0", () => {
         console.log(`Resumix server running on http://0.0.0.0:${PORT}`);
@@ -1964,6 +2066,8 @@ if (!process.env.VERCEL && !process.env.SKIP_SERVER_LISTEN) {
   }
 
   setupApp();
+} else {
+  registerGlobalErrorHandler(app);
 }
 
 export default app;

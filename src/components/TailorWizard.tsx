@@ -39,8 +39,10 @@ function mapFrontendAiError(errorCode?: string, errorMsg?: string): { title: str
     title = "AI Output Malformed";
   } else if (code === "VALIDATION_ERROR" || code === "FACTUAL_VALIDATION_FAILED") {
     title = "Factual Validation Rejected";
-  } else if (code === "MISSING_REQUIRED_DATA" || code === "INVALID_PROFILE_HASH") {
+  } else if (code === "MISSING_REQUIRED_DATA" || code === "INVALID_PROFILE_HASH" || code === "INVALID_REQUEST") {
     title = "Incomplete Analysis Context";
+  } else if (code === "MISSING_RESUME" || code === "INVALID_RESUME_ID" || code === "INVALID_RESUME_TEXT") {
+    title = "Resume Verification Failed";
   } else if (code === "AI_PROVIDER_ERROR") {
     title = "AI Service Error";
   } else if (code === "INTERNAL_SERVER_ERROR") {
@@ -308,14 +310,16 @@ export default function TailorWizard({
           targetCompany: targetCompany.trim(), 
           targetRole: targetRole.trim(), 
           jobDescription: jobDescription.trim(), 
-          experienceLevel 
+          experienceLevel,
+          resumeId: selectedResume.id,
+          resumeText: selectedResume.content
         })
       });
       
       if (!profileRes.ok || !profileJson.success || !profileJson.data) {
         const errorInfo = mapFrontendAiError(
-          profileJson.error?.code,
-          profileJson.error?.message || "Requirement engine failed to extract verified requirements."
+          profileJson.error?.code || profileJson.code,
+          profileJson.error?.message || profileJson.message || "Requirement engine failed to extract verified requirements."
         );
         setErrorDetails(errorInfo);
         setStep("ERROR");
@@ -338,8 +342,8 @@ export default function TailorWizard({
 
       if (!parseRes.ok || !parseJson.success || !parseJson.data) {
         const errorInfo = mapFrontendAiError(
-          parseJson.error?.code,
-          parseJson.error?.message || "Resume parser failed to extract structured entities."
+          parseJson.error?.code || parseJson.code,
+          parseJson.error?.message || parseJson.message || "Resume parser failed to extract structured entities."
         );
         setErrorDetails(errorInfo);
         setStep("ERROR");
@@ -348,8 +352,8 @@ export default function TailorWizard({
       const parsedData: ParsedResume = parseJson.data;
       setParsedResume(parsedData);
 
-      // Phase 3 & 4: Objective Gap Analysis
-      setLoadingMessage("Phase 3: Performing Strict Gap Analysis...");
+      // Objective Gap Analysis
+      setLoadingMessage("Performing Strict Gap Analysis...");
       await runGapAnalysis(parsedData, profileData);
       
     } catch (err: any) {
@@ -379,8 +383,8 @@ export default function TailorWizard({
 
     if (!gapRes.ok || !gapJson.success || !gapJson.data) {
       const errorInfo = mapFrontendAiError(
-        gapJson.error?.code,
-        gapJson.error?.message || "Gap analysis engine failed to calculate verified matches."
+        gapJson.error?.code || gapJson.code,
+        gapJson.error?.message || gapJson.message || "Gap analysis engine failed to calculate verified matches."
       );
       setErrorDetails(errorInfo);
       setStep("ERROR");
