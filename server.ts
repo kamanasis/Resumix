@@ -1335,7 +1335,12 @@ app.post("/api/gap-analysis", async (req, res) => {
     const evaluation = evaluateResumeAgainstRequirements(
       parsedResume,
       structuredRequirements,
-      rawResumeText || ""
+      rawResumeText || "",
+      {
+        targetRole: frozenProfile.targetRole,
+        targetCompany: frozenProfile.targetCompany,
+        jobDescription: frozenProfile.jobDescription
+      }
     );
 
     const result = {
@@ -1356,7 +1361,12 @@ app.post("/api/gap-analysis", async (req, res) => {
       categorizedGaps: evaluation.categorizedGaps,
       completionState: evaluation.completionState,
       overallCompletion: evaluation.targetMatchScore,
-      isReadyToApply: evaluation.isReadyToApply
+      isReadyToApply: evaluation.isReadyToApply,
+      scoreConfidence: evaluation.scoreConfidence,
+      applicationReadiness: evaluation.applicationReadiness,
+      highestImpactActions: evaluation.highestImpactActions,
+      resumeQualityAudit: evaluation.resumeQualityAudit,
+      scoreBreakdownDetails: evaluation.scoreBreakdownDetails
     };
 
     if (!validateGapAnalysis(result)) {
@@ -1420,8 +1430,8 @@ app.post("/api/tailor-gap", async (req, res) => {
     const hasCandidateEvidence = safeResumeText.toLowerCase().includes(itemTitle.toLowerCase());
 
     const ai = getAI();
-    const systemPrompt = `You are a strict, truthful ATS Recruitment Advisor and Technical Skill Analyst.
-TASK: Formulate a truthful, actionable explanation and guidance for ONE target checklist item.
+    const systemPrompt = `You are a strict, truthful ATS Career Intelligence Advisor and Technical Recruiter.
+TASK: Formulate an evidence-based, actionable 7-part coaching explanation for ONE target requirement.
 
 TARGET ROLE CONTEXT:
 - Role: "${frozenProfile.targetRole || "Target Role"}"
@@ -1440,7 +1450,8 @@ CRITICAL ANTI-FABRICATION RULES:
 1. TRUTHFULNESS: Never claim candidate has mastered "${itemTitle}" if evidence is missing.
 2. NO FAKE METRICS: Do not invent quantitative metrics (e.g. "improved by 40%", "$500k", "team of 10").
 3. NO FAKE EMPLOYERS: Do not invent employment history or companies.
-4. EVIDENCE STATUS:
+4. WHAT NOT TO CHANGE: Explicitly warn the user NOT to fabricate skills or invent accomplishments.
+5. EVIDENCE STATUS:
    - If missing from resume: set evidenceStatus strictly to: "No verified evidence in resume — confirmation required before adding"
    - If present in resume: set evidenceStatus strictly to: "Supported by existing resume text"`;
 
@@ -1452,7 +1463,14 @@ CRITICAL ANTI-FABRICATION RULES:
         evidenceStatus: { type: Type.STRING, description: "Strict factual status of candidate evidence." },
         reason: { type: Type.STRING, description: "Clear explanation of why this requirement is critical for the target role." },
         atsImpact: { type: Type.STRING, description: "Expected impact on ATS parsing." },
-        confidence: { type: Type.INTEGER, description: "Confidence score between 0 and 100." }
+        confidence: { type: Type.INTEGER, description: "Confidence score between 0 and 100." },
+        whyItMatters: { type: Type.STRING, description: "Why this requirement matters for this specific role." },
+        whatResumixFound: { type: Type.STRING, description: "Exact analysis of what Resumix found in the resume." },
+        whatYouCanSafelyChange: { type: Type.STRING, description: "Safe, truthful changes the user can make if they possess the skill." },
+        whatYouShouldNotChange: { type: Type.STRING, description: "Explicit warning of what NOT to do or fabricate." },
+        exampleBetterVersion: { type: Type.STRING, description: "Example of a professional bullet point or project description without fabricated metrics." },
+        expectedImpact: { type: Type.STRING, description: "Concrete impact on ATS and recruiter review." },
+        evidenceNeeded: { type: Type.STRING, description: "Types of proof needed (projects, code, certifications)." }
       },
       required: ["section", "suggestedSentence", "evidenceStatus", "reason", "atsImpact", "confidence"]
     };
@@ -1483,22 +1501,52 @@ CRITICAL ANTI-FABRICATION RULES:
       return sendError(res, "AI_MALFORMED_RESPONSE", "The AI service returned an unparseable response format. Please retry.", 502);
     }
 
+    // Populate reliable defaults for 7 coaching dimensions
+    if (!result.whyItMatters) {
+      result.whyItMatters = result.reason || `Target role specifies ${itemTitle} as a ${importance.toLowerCase()} qualification for ATS evaluation.`;
+    }
+    if (!result.whatResumixFound) {
+      result.whatResumixFound = hasCandidateEvidence 
+        ? `Found mentions of "${itemTitle}" in resume text, but evidence lacks depth or measurable outcomes.`
+        : `No verified evidence of "${itemTitle}" was detected in your parsed resume.`;
+    }
+    if (!result.whatYouCanSafelyChange) {
+      result.whatYouCanSafelyChange = hasCandidateEvidence
+        ? `Clarify where you applied ${itemTitle} in your projects or work experience, and describe the technical context.`
+        : `If you have genuine academic, project, or work experience with ${itemTitle}, add a concrete example with real context.`;
+    }
+    if (!result.whatYouShouldNotChange) {
+      result.whatYouShouldNotChange = `Do NOT add "${itemTitle}" merely to inflate your ATS score if you do not have genuine experience.`;
+    }
+    if (!result.exampleBetterVersion) {
+      result.exampleBetterVersion = result.suggestedSentence;
+    }
+    if (!result.expectedImpact) {
+      result.expectedImpact = `${result.atsImpact || 'Positive'} impact on technical keyword coverage and recruiter evaluation.`;
+    }
+    if (!result.evidenceNeeded) {
+      result.evidenceNeeded = `Project, coursework, internship, or work experience demonstrating ${itemTitle}.`;
+    }
+
     if (!validateTailorGap(result)) {
       return sendError(res, "VALIDATION_ERROR", "The generated suggestion failed structural verification and was rejected.", 422);
     }
 
     // Factual validation: Ensure no unsupported quantitative metrics were fabricated in suggestedSentence
-    const generatedMetrics = extractNumericMetrics(result.suggestedSentence);
-    if (generatedMetrics.length > 0) {
-      const originalMetrics = extractNumericMetrics(safeResumeText);
-      const unsupported = generatedMetrics.filter(m => !originalMetrics.includes(m));
-      if (unsupported.length > 0) {
-        return sendError(
-          res, 
-          "VALIDATION_ERROR", 
-          `The generated suggestion contained fabricated metrics (${unsupported.join(", ")}). Factual validation rejected this output.`,
-          422
-        );
+    const sentencesToValidate = [result.suggestedSentence, result.exampleBetterVersion].filter(Boolean);
+    for (const sentence of sentencesToValidate) {
+      const generatedMetrics = extractNumericMetrics(sentence);
+      if (generatedMetrics.length > 0) {
+        const originalMetrics = extractNumericMetrics(safeResumeText);
+        const unsupported = generatedMetrics.filter(m => !originalMetrics.includes(m));
+        if (unsupported.length > 0) {
+          return sendError(
+            res, 
+            "VALIDATION_ERROR", 
+            `The generated suggestion contained fabricated metrics (${unsupported.join(", ")}). Factual validation rejected this output.`,
+            422
+          );
+        }
       }
     }
 

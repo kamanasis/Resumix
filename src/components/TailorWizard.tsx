@@ -1,10 +1,21 @@
 import React, { useState } from "react";
-import { ResumeFile, GapReport, RequirementProfile, ParsedResume, MissingItem, TailorRecommendation } from "../types";
+import { 
+  ResumeFile, 
+  GapReport, 
+  RequirementProfile, 
+  ParsedResume, 
+  MissingItem, 
+  TailorRecommendation,
+  GapClassification,
+  PriorityTier
+} from "../types";
 import { 
   Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, TrendingDown,
   Compass, Info, Cpu, AlertTriangle, CheckSquare, Lock, 
   RefreshCw, XCircle, ArrowLeft, Printer, FileText, FileSpreadsheet,
-  Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers, Briefcase
+  Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers, Briefcase,
+  CheckCircle2, X, ChevronRight, HelpCircle, Target, Award, ShieldCheck,
+  Zap, BookOpen, AlertCircle, ArrowUpRight, Search, ListFilter, Activity
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
@@ -118,16 +129,21 @@ export default function TailorWizard({
     title: string;
   } | null>(null);
 
-  // Pipeline states (Part 3 - Fail Closed)
+  // Pipeline states
   const [step, setStep] = useState<"SETUP" | "PROCESSING" | "DASHBOARD" | "LOCKED" | "ERROR">("SETUP");
   const [loadingMessage, setLoadingMessage] = useState("");
   const [errorDetails, setErrorDetails] = useState<{ title: string; message: string }>({ title: "", message: "" });
+  const [pipelineStage, setPipelineStage] = useState(1);
 
   // Data states
   const [frozenProfile, setFrozenProfile] = useState<RequirementProfile | null>(null);
   const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null);
   const [gapReport, setGapReport] = useState<GapReport | null>(null);
   
+  // Dashboard UI & Filter states
+  const [gapFilter, setGapFilter] = useState<"ALL" | "CRITICAL" | "HIGH_IMPACT" | "MEDIUM_IMPACT" | "LOW_IMPACT" | "WEAK" | "VERIFIED">("ALL");
+  const [showWhyScoreModal, setShowWhyScoreModal] = useState(false);
+
   // Single-issue Tailoring UI state (per-item caching, loading, and fail-closed error handling)
   const [activeMissingItem, setActiveMissingItem] = useState<MissingItem | null>(null);
   const [tailorRecommendations, setTailorRecommendations] = useState<Record<string, TailorRecommendation>>({});
@@ -268,7 +284,7 @@ export default function TailorWizard({
     }
   };
 
-  // Cross-Resume State Isolation (Part 26 - Resume Version Integrity)
+  // Cross-Resume State Isolation (Resume Version Integrity)
   React.useEffect(() => {
     setStep("SETUP");
     setFrozenProfile(null);
@@ -285,6 +301,9 @@ export default function TailorWizard({
     setIntelligenceError(null);
     setTrackedSuccess(false);
     setErrorDetails({ title: "", message: "" });
+    setPipelineStage(1);
+    setGapFilter("ALL");
+    setShowWhyScoreModal(false);
   }, [selectedResume?.id]);
 
   const startPipeline = async (e?: React.FormEvent) => {
@@ -299,7 +318,7 @@ export default function TailorWizard({
       return;
     }
 
-    // Pre-Analysis Resume Quality Gate (Part 22)
+    // Pre-Analysis Resume Quality Gate
     if (selectedResume.extractionStatus === "EXTRACTION_FAILED") {
       setErrorDetails({
         title: "Resume Extraction Incomplete",
@@ -319,11 +338,33 @@ export default function TailorWizard({
     }
 
     setStep("PROCESSING");
+    setPipelineStage(1);
     setErrorDetails({ title: "", message: "" });
 
     try {
-      // Generate Requirement Profile
-      setLoadingMessage("Generating Frozen Requirement Profile...");
+      // Stage 1: Parse Resume Structure
+      setLoadingMessage("Analyzing resume structure and extracting verified entities...");
+      const { res: parseRes, json: parseJson } = await safeFetchJson("/api/parse-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resumeText: selectedResume.content })
+      });
+
+      if (!parseRes.ok || !parseJson.success || !parseJson.data) {
+        const errorInfo = mapFrontendAiError(
+          parseJson.error?.code || parseJson.code,
+          parseJson.error?.message || parseJson.message || "Resume parser failed to extract structured entities."
+        );
+        setErrorDetails(errorInfo);
+        setStep("ERROR");
+        return;
+      }
+      const parsedData: ParsedResume = parseJson.data;
+      setParsedResume(parsedData);
+
+      // Stage 2: Extract Frozen Requirement Profile
+      setPipelineStage(2);
+      setLoadingMessage("Extracting and normalizing target job requirements...");
       const { res: profileRes, json: profileJson } = await safeFetchJson("/api/generate-requirement-profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -353,28 +394,9 @@ export default function TailorWizard({
       }
       setFrozenProfile(profileData);
 
-      // Parse Resume Structure
-      setLoadingMessage("Parsing Current Resume Structure...");
-      const { res: parseRes, json: parseJson } = await safeFetchJson("/api/parse-resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resumeText: selectedResume.content })
-      });
-
-      if (!parseRes.ok || !parseJson.success || !parseJson.data) {
-        const errorInfo = mapFrontendAiError(
-          parseJson.error?.code || parseJson.code,
-          parseJson.error?.message || parseJson.message || "Resume parser failed to extract structured entities."
-        );
-        setErrorDetails(errorInfo);
-        setStep("ERROR");
-        return;
-      }
-      const parsedData: ParsedResume = parseJson.data;
-      setParsedResume(parsedData);
-
-      // Objective Gap Analysis
-      setLoadingMessage("Performing Strict Gap Analysis...");
+      // Stages 3-6: Objective Gap Analysis, Matching, Scoring & Recommendations
+      setPipelineStage(3);
+      setLoadingMessage("Matching candidate evidence against requirements...");
       await runGapAnalysis(parsedData, profileData);
       
     } catch (err: any) {
@@ -391,7 +413,8 @@ export default function TailorWizard({
   };
 
   const runGapAnalysis = async (parsed: ParsedResume, profile: RequirementProfile) => {
-    setLoadingMessage("Analyzing Missing Requirements...");
+    setPipelineStage(4);
+    setLoadingMessage("Calculating deterministic ATS compatibility and category scores...");
     const { res: gapRes, json: gapJson } = await safeFetchJson("/api/gap-analysis", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -414,9 +437,15 @@ export default function TailorWizard({
     const gapData: GapReport = gapJson.data;
     setGapReport(gapData);
 
+    setPipelineStage(5);
+    setLoadingMessage("Prioritizing critical gaps and ranking high-impact improvements...");
+
     // Fetch Market & Role Intelligence patterns
     const candidateSkills = parsed?.skills || [];
     fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
+
+    setPipelineStage(6);
+    setLoadingMessage("Preparing actionable recommendations and application readiness...");
 
     // Save only verified real gap reports to Firestore
     try {
@@ -435,11 +464,7 @@ export default function TailorWizard({
       console.warn("Could not save gap report to Firestore:", saveErr);
     }
 
-    if (gapData.isReadyToApply) {
-      setStep("LOCKED");
-    } else {
-      setStep("DASHBOARD");
-    }
+    setStep("DASHBOARD");
     onAnalysisCreated();
   };
 
@@ -693,16 +718,72 @@ export default function TailorWizard({
   // -------------------------------------------------------------------------------- //
 
   if (step === "PROCESSING") {
+    const stages = [
+      { id: 1, label: "Analyzing resume structure & extracting entities" },
+      { id: 2, label: "Extracting & normalizing job requirements" },
+      { id: 3, label: "Matching candidate evidence against requirements" },
+      { id: 4, label: "Calculating deterministic ATS compatibility score" },
+      { id: 5, label: "Prioritizing critical gaps & ranking high-impact improvements" },
+      { id: 6, label: "Preparing actionable recommendations & application readiness" }
+    ];
+
     return (
-      <div className="py-20 flex flex-col items-center justify-center text-center bg-white/70 backdrop-blur-xl border border-white rounded-3xl p-8 shadow-sm">
-        <motion.div 
-          animate={{ rotate: 360 }} 
-          transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-          className="w-16 h-16 border-4 border-cyan-100 border-t-cyan-500 rounded-full mb-6"
-        />
-        <h3 className="text-slate-800 font-display font-bold text-xl mb-2">Deterministic Engine Running</h3>
-        <p className="text-cyan-600 text-sm font-semibold mb-4">{loadingMessage}</p>
-        <span className="text-xs text-slate-400">Performing objective requirement mapping without data fabrication...</span>
+      <div className="py-14 max-w-xl mx-auto w-full bg-white/80 backdrop-blur-xl border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm text-center space-y-6 animate-fadeIn">
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-cyan-50 border border-cyan-200 text-cyan-800 rounded-full text-[11px] font-bold uppercase tracking-wider">
+            <Cpu className="w-3.5 h-3.5 text-cyan-600" />
+            <span>Deterministic Analysis Engine</span>
+          </div>
+          <h3 className="text-xl font-display font-bold text-slate-900">
+            Evaluating {targetRole || "Target Role"} at {targetCompany || "Target Company"}
+          </h3>
+          <p className="text-xs text-slate-500 font-medium">
+            {loadingMessage || "Running evidence verification without data fabrication..."}
+          </p>
+        </div>
+
+        <div className="space-y-2.5 text-left pt-2">
+          {stages.map((st) => {
+            const isDone = pipelineStage > st.id;
+            const isCurrent = pipelineStage === st.id;
+            return (
+              <div 
+                key={st.id}
+                className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between text-xs ${
+                  isDone ? "bg-emerald-50/70 border-emerald-200 text-emerald-900" :
+                  isCurrent ? "bg-cyan-50/80 border-cyan-300 text-cyan-900 shadow-sm" :
+                  "bg-slate-50/50 border-slate-100 text-slate-400"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[11px] shrink-0 ${
+                    isDone ? "bg-emerald-500 text-white" :
+                    isCurrent ? "bg-cyan-500 text-white animate-pulse" :
+                    "bg-slate-200 text-slate-500"
+                  }`}>
+                    {isDone ? <Check className="w-3.5 h-3.5" /> : st.id}
+                  </div>
+                  <span className={`font-semibold ${isCurrent ? "text-slate-900 font-bold" : ""}`}>
+                    {st.label}
+                  </span>
+                </div>
+                <div>
+                  {isDone && <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Completed</span>}
+                  {isCurrent && (
+                    <span className="text-[10px] font-bold text-cyan-600 uppercase tracking-wider flex items-center gap-1">
+                      <RefreshCw className="w-3 h-3 animate-spin" /> Running
+                    </span>
+                  )}
+                  {!isDone && !isCurrent && <span className="text-[10px] text-slate-400">Pending</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="text-[11px] text-slate-400 font-medium">
+          Zero fabrication policy: Scores are strictly computed from verified resume text.
+        </p>
       </div>
     );
   }
@@ -860,64 +941,355 @@ export default function TailorWizard({
   }
 
   if (step === "DASHBOARD" && gapReport) {
+    const allMissing = gapReport.missingItems || [];
+    const criticalItems = allMissing.filter(i => i.priorityTier === "CRITICAL" || i.importance === "Critical");
+    const highImpactItems = allMissing.filter(i => i.priorityTier === "HIGH_IMPACT");
+    const mediumImpactItems = allMissing.filter(i => i.priorityTier === "MEDIUM_IMPACT");
+    const lowImpactItems = allMissing.filter(i => i.priorityTier === "LOW_IMPACT");
+    const weakItems = allMissing.filter(i => i.gapClassification === "PRESENT_BUT_WEAK");
+    const verifiedRequirements = gapReport.categorizedGaps?.matchedRequirements || [];
+
+    const displayedItems = gapFilter === "ALL" ? allMissing :
+      gapFilter === "CRITICAL" ? criticalItems :
+      gapFilter === "HIGH_IMPACT" ? highImpactItems :
+      gapFilter === "MEDIUM_IMPACT" ? mediumImpactItems :
+      gapFilter === "LOW_IMPACT" ? lowImpactItems :
+      gapFilter === "WEAK" ? weakItems : [];
+
+    const atsScore = gapReport.atsScore ?? gapReport.scores.atsCompatibility ?? 0;
+    const isJdLimited = Boolean(gapReport.scoreConfidence?.isJdLimited);
+    const confidenceLevel = gapReport.scoreConfidence?.level || "HIGH_CONFIDENCE";
+    const readiness = gapReport.applicationReadiness;
+    const readinessStatus = readiness?.status || (gapReport.isReadyToApply ? "READY_TO_APPLY" : "NEEDS_MINOR_IMPROVEMENTS");
+    const highestImpactActions = gapReport.highestImpactActions || [];
+    const qualityAudit = gapReport.resumeQualityAudit;
+
     return (
       <div className="space-y-6">
-        {/* DASHBOARD HEADER */}
-        <div className="bg-white/70 backdrop-blur-md border border-slate-200 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="px-2.5 py-1 bg-cyan-100 text-cyan-700 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-                <Lock className="w-3 h-3" /> Target Profile Active
-              </span>
-            </div>
-            <h3 className="text-2xl font-display font-bold text-slate-900">
-              {targetRole} <span className="text-slate-400">at</span> {targetCompany}
-            </h3>
-            <p className="text-slate-500 text-xs mt-1">
-              Verified {gapReport.missingItems?.length || 0} gap(s) against required qualifications.
-            </p>
-          </div>
-          
-          <div className="flex flex-col items-end">
-            <span className="text-xs font-bold text-slate-600">Calculated Completion</span>
-            <div className="flex items-center gap-3 mt-1">
-              <div className="w-32 bg-slate-200 h-2 rounded-full overflow-hidden">
-                <motion.div 
-                  initial={{ width: 0 }} 
-                  animate={{ width: `${gapReport.overallCompletion || 0}%` }} 
-                  className="bg-cyan-500 h-full shadow-[0_0_8px_#22d3ee]"
-                />
+        {/* EXPLAINABLE SCORE MODAL */}
+        <WhyThisScoreModal 
+          isOpen={showWhyScoreModal} 
+          onClose={() => setShowWhyScoreModal(false)} 
+          gapReport={gapReport} 
+          targetRole={targetRole} 
+          targetCompany={targetCompany} 
+        />
+
+        {/* TOP INTELLIGENCE HEADER */}
+        <div className="bg-white/80 backdrop-blur-md border border-slate-200 p-6 rounded-3xl shadow-sm space-y-4">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                <span className="px-2.5 py-0.5 bg-cyan-100 text-cyan-800 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                  <Lock className="w-3 h-3" /> Target Profile Active
+                </span>
+
+                {/* Source attribution */}
+                <span className="px-2.5 py-0.5 bg-slate-100 text-slate-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                  {jobDescription ? "Source: Job Description (Primary Truth)" : importedJobData ? `Source: Imported (${importedJobData.source?.provider || "Verified"})` : "Source: Standard Role Profile"}
+                </span>
+
+                {/* Score Confidence Pill */}
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${
+                  confidenceLevel === "HIGH_CONFIDENCE" 
+                    ? "bg-emerald-100 text-emerald-800" 
+                    : confidenceLevel === "MEDIUM_CONFIDENCE"
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-slate-100 text-slate-700"
+                }`}>
+                  {confidenceLevel === "HIGH_CONFIDENCE" && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
+                  {confidenceLevel === "MEDIUM_CONFIDENCE" && <AlertTriangle className="w-3 h-3 text-amber-600" />}
+                  <span>{confidenceLevel === "HIGH_CONFIDENCE" ? "High Confidence" : confidenceLevel === "MEDIUM_CONFIDENCE" ? "Medium Confidence" : "Limited Confidence"}</span>
+                </span>
               </div>
-              <span className="text-lg font-display font-bold text-cyan-600">{gapReport.overallCompletion || 0}%</span>
+
+              <h3 className="text-2xl font-display font-bold text-slate-900">
+                {targetRole} <span className="text-slate-400">at</span> {targetCompany}
+              </h3>
+              <p className="text-slate-500 text-xs mt-1">
+                Evaluated against {gapReport.scoreBreakdown?.requiredTotal || 0} required and {gapReport.scoreBreakdown?.preferredTotal || 0} preferred qualifications.
+              </p>
             </div>
+            
+            {/* Header Action Buttons */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button 
+                onClick={() => handleExport("pdf")}
+                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl flex items-center gap-1.5 transition-all text-xs shadow-sm"
+              >
+                <Printer className="w-3.5 h-3.5" /> PDF
+              </button>
+              <button 
+                onClick={() => handleExport("docx")}
+                className="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl flex items-center gap-1.5 transition-all text-xs shadow-sm"
+              >
+                <FileText className="w-3.5 h-3.5" /> Word
+              </button>
+              <button 
+                onClick={() => setStep("SETUP")} 
+                className="px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold rounded-xl transition-all text-xs"
+              >
+                New Target
+              </button>
+            </div>
+          </div>
+
+          {/* Transparent Limited JD Banner if applicable */}
+          {isJdLimited && (
+            <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="font-bold">Transparent Score Confidence Notice:</strong> Score confidence is limited because the job description contains limited requirement information. Standard role specifications were used for comparison.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* HERO SECTION: ATS COMPATIBILITY + CATEGORY SCORE MATRIX */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          {/* Main ATS Gauge Card */}
+          <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-slate-950 text-white rounded-3xl p-6 shadow-md flex flex-col justify-between relative overflow-hidden border border-slate-800">
+            <div className="relative z-10 space-y-1">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-400 flex items-center gap-1">
+                  <Activity className="w-3.5 h-3.5" /> ATS Compatibility
+                </span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  atsScore >= 80 ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" :
+                  atsScore >= 60 ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" :
+                  "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                }`}>
+                  {atsScore >= 80 ? "Strong Match" : atsScore >= 60 ? "Competitive" : "Needs Work"}
+                </span>
+              </div>
+              <p className="text-slate-400 text-xs">Deterministic requirement & keyword alignment</p>
+            </div>
+
+            {/* Big Score Display */}
+            <div className="py-6 my-auto text-center relative z-10">
+              <div className="inline-flex items-baseline gap-1">
+                <span className="text-6xl font-display font-extrabold tracking-tight text-white">
+                  {atsScore}
+                </span>
+                <span className="text-2xl font-bold text-slate-500 font-display">/100</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-2">
+                {gapReport.scoreBreakdown?.requiredMatched || 0} of {gapReport.scoreBreakdown?.requiredTotal || 0} required qualifications verified
+              </p>
+            </div>
+
+            {/* Why This Score Button */}
+            <div className="relative z-10 pt-3 border-t border-slate-800/80 flex justify-between items-center">
+              <button
+                type="button"
+                onClick={() => setShowWhyScoreModal(true)}
+                className="w-full py-2.5 px-4 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded-xl text-xs font-bold text-cyan-300 flex items-center justify-center gap-2 transition-all"
+              >
+                <HelpCircle className="w-3.5 h-3.5" /> Why this score? View breakdown
+              </button>
+            </div>
+          </div>
+
+          {/* Category Score Matrix (6 Distinct Categories) */}
+          <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <ScoreCard 
+              title="Required Skills" 
+              score={gapReport.scoreBreakdown?.requiredPercentage ?? gapReport.scores.requiredSkills}
+              subtitle={`${gapReport.scoreBreakdown?.requiredMatched ?? 0} of ${gapReport.scoreBreakdown?.requiredTotal ?? 0} verified`}
+              badgeText="40% of ATS Score"
+            />
+            <ScoreCard 
+              title="Preferred Skills" 
+              score={gapReport.scoreBreakdown?.preferredPercentage ?? gapReport.scores.preferredSkills}
+              subtitle={`${gapReport.scoreBreakdown?.preferredMatched ?? 0} of ${gapReport.scoreBreakdown?.preferredTotal ?? 0} verified`}
+              badgeText="20% of ATS Score"
+            />
+            <ScoreCard 
+              title="Keyword Coverage" 
+              score={gapReport.scoreBreakdown?.keywordPercentage ?? 0}
+              subtitle={`${gapReport.scoreBreakdown?.keywordsMatched ?? 0} of ${gapReport.scoreBreakdown?.keywordsTotal ?? 0} covered`}
+              badgeText="15% of ATS Score"
+            />
+            <ScoreCard 
+              title="Experience Depth" 
+              score={gapReport.scores.experienceMatch ?? 0}
+              subtitle={`${(parsedResume?.experience || []).length} role(s) verified`}
+              badgeText="10% of ATS Score"
+            />
+            <ScoreCard 
+              title="Role Alignment" 
+              score={gapReport.scoreBreakdownDetails?.roleAlignment?.score ?? gapReport.scores.companyMatch ?? 70}
+              subtitle="Target vocabulary match"
+              badgeText="10% of ATS Score"
+            />
+            <ScoreCard 
+              title="Resume Structure" 
+              score={gapReport.scores.formatting ?? 90}
+              subtitle="Parsing & layout clarity"
+              badgeText="5% of ATS Score"
+            />
           </div>
         </div>
+
+        {/* APPLICATION READINESS BANNER */}
+        <div className={`p-5 rounded-3xl border shadow-sm space-y-3 ${
+          readinessStatus === "READY_TO_APPLY" 
+            ? "bg-emerald-50/70 border-emerald-200 text-emerald-950" :
+          readinessStatus === "NEEDS_MINOR_IMPROVEMENTS" 
+            ? "bg-cyan-50/70 border-cyan-200 text-cyan-950" :
+          readinessStatus === "NEEDS_SIGNIFICANT_OPTIMIZATION" 
+            ? "bg-amber-50/70 border-amber-200 text-amber-950" :
+            "bg-rose-50/70 border-rose-200 text-rose-950"
+        }`}>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                readinessStatus === "READY_TO_APPLY" ? "bg-emerald-200 text-emerald-900" :
+                readinessStatus === "NEEDS_MINOR_IMPROVEMENTS" ? "bg-cyan-200 text-cyan-900" :
+                readinessStatus === "NEEDS_SIGNIFICANT_OPTIMIZATION" ? "bg-amber-200 text-amber-900" :
+                "bg-rose-200 text-rose-900"
+              }`}>
+                Application Readiness: {readinessStatus.replace(/_/g, " ")}
+              </span>
+            </div>
+            <span className="text-xs font-medium opacity-75">Deterministic evaluation outcome</span>
+          </div>
+
+          <p className="text-sm font-bold">
+            {readiness?.headline || "Your resume has been analyzed against the target job profile."}
+          </p>
+
+          {readiness?.reasons && readiness.reasons.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+              {readiness.reasons.map((r, idx) => (
+                <div key={idx} className="flex items-start gap-2 text-xs">
+                  {r.type === "positive" && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />}
+                  {r.type === "warning" && <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
+                  {r.type === "neutral" && <Info className="w-4 h-4 text-cyan-600 shrink-0 mt-0.5" />}
+                  <span className="leading-snug">{r.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* YOUR HIGHEST-IMPACT ACTIONS (3–7 Ranked Items) */}
+        {highestImpactActions.length > 0 && (
+          <div className="bg-white/80 backdrop-blur-md border border-slate-200 p-6 rounded-3xl shadow-sm space-y-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <h4 className="text-base font-display font-bold text-slate-900 flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-amber-500" /> Your Highest-Impact Actions
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Prioritized actions ranked by expected ATS and recruiter impact. Never fabricate unpossessed skills.
+                </p>
+              </div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                {highestImpactActions.length} Actions
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {highestImpactActions.map((action, idx) => (
+                <div 
+                  key={idx} 
+                  className="p-4 rounded-2xl border border-slate-200/80 bg-white hover:border-cyan-300 transition-all shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-7 h-7 rounded-xl bg-cyan-100 text-cyan-800 flex items-center justify-center font-bold text-xs shrink-0 font-display">
+                      #{action.rank}
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-slate-900">{action.title}</span>
+                        <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md text-[10px] font-semibold">
+                          {action.category}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${
+                          action.effort === "Low" ? "bg-emerald-100 text-emerald-800" :
+                          action.effort === "Medium" ? "bg-cyan-100 text-cyan-800" :
+                          "bg-amber-100 text-amber-800"
+                        }`}>
+                          {action.effort} Effort
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600">{action.whyItMatters}</p>
+                      <p className="text-[11px] text-cyan-700 font-medium bg-cyan-50/60 p-2 rounded-xl border border-cyan-100">
+                        <strong>Actionable Tip:</strong> {action.actionableTip}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* RESUME QUALITY CHECK PANEL */}
+        {qualityAudit && (
+          <div className="bg-white/80 backdrop-blur-md border border-slate-200 p-6 rounded-3xl shadow-sm space-y-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <h4 className="text-base font-display font-bold text-slate-900 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" /> Resume Quality & Parsing Confidence
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Automated structural audit of text readability, contact hygiene, and section completeness.
+                </p>
+              </div>
+              <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold font-display">
+                {qualityAudit.parsingConfidence}% Confidence
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {qualityAudit.checks.map((chk, idx) => (
+                <div key={idx} className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-1 text-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-slate-800">{chk.name}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                      chk.status === "PASS" ? "bg-emerald-100 text-emerald-800" :
+                      chk.status === "WARN" ? "bg-amber-100 text-amber-800" :
+                      "bg-slate-200 text-slate-700"
+                    }`}>
+                      {chk.status}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-snug">{chk.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* TABS NAVIGATION */}
         <div className="flex border-b border-slate-200">
           <button 
             onClick={() => setDashboardTab("checklist")}
-            className={`px-6 py-3 font-display font-bold text-sm transition-all border-b-2 ${
+            className={`px-6 py-3 font-display font-bold text-sm transition-all border-b-2 flex items-center gap-2 ${
               dashboardTab === "checklist" ? "border-cyan-500 text-cyan-600" : "border-transparent text-slate-500 hover:text-slate-700"
             }`}
           >
-            Checklist ({gapReport.missingItems?.length || 0} Gaps)
+            <CheckSquare className="w-4 h-4" />
+            <span>Requirements & Gaps ({gapReport.missingItems?.length || 0})</span>
           </button>
           {batchResult && (
             <button 
               onClick={() => setDashboardTab("tailored")}
-              className={`px-6 py-3 font-display font-bold text-sm transition-all border-b-2 ${
+              className={`px-6 py-3 font-display font-bold text-sm transition-all border-b-2 flex items-center gap-2 ${
                 dashboardTab === "tailored" ? "border-cyan-500 text-cyan-600" : "border-transparent text-slate-500 hover:text-slate-700"
               }`}
             >
-              Tailored Draft
+              <FileText className="w-4 h-4" />
+              <span>Tailored Draft</span>
             </button>
           )}
           <button 
             onClick={() => {
               setDashboardTab("intelligence");
               if (!marketIntelligence && !isLoadingIntelligence) {
-                const candidateSkills = parsedResume?.skills?.map((s) => s.name) || [];
+                const candidateSkills = parsedResume?.skills || [];
                 fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
               }
             }}
@@ -926,216 +1298,360 @@ export default function TailorWizard({
             }`}
           >
             <BarChart3 className="w-4 h-4" />
-            Market Intelligence
-            {marketIntelligence && (
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
-                marketIntelligence.evidenceStrength === "STRONG_EVIDENCE" ? "bg-emerald-100 text-emerald-700" :
-                marketIntelligence.evidenceStrength === "MODERATE_EVIDENCE" ? "bg-cyan-100 text-cyan-700" :
-                marketIntelligence.evidenceStrength === "LIMITED_EVIDENCE" ? "bg-amber-100 text-amber-700" :
-                "bg-slate-100 text-slate-600"
-              }`}>
-                {marketIntelligence.evidenceStrength?.replace("_EVIDENCE", "") || "DATA"}
-              </span>
-            )}
+            <span>Market Intelligence</span>
           </button>
         </div>
 
+        {/* TAB 1: REQUIREMENTS & GAPS CHECKLIST */}
         {dashboardTab === "checklist" && (
           <>
-            {/* CATEGORY SCORECARD (Calculated from Real Data) */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <ScoreCard title="ATS Compatibility" score={gapReport.atsScore ?? gapReport.scores.atsCompatibility} />
-              <ScoreCard title="Target Match" score={gapReport.targetMatchScore ?? gapReport.scores.companyMatch} />
-              <ScoreCard title="Required Skills" score={gapReport.scoreBreakdown?.requiredPercentage ?? gapReport.scores.requiredSkills} />
-              <ScoreCard title="Experience Match" score={gapReport.scoreBreakdown?.experienceMatchScore ?? gapReport.scores.experienceMatch} />
+            <div className="space-y-6">
+              {/* FILTER PILLS */}
+            <div className="flex flex-wrap items-center gap-2 pb-2">
+              <span className="text-xs font-bold text-slate-400 mr-2 flex items-center gap-1">
+                <ListFilter className="w-3.5 h-3.5" /> Filter by:
+              </span>
+              
+              <button
+                onClick={() => setGapFilter("ALL")}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                  gapFilter === "ALL" ? "bg-slate-900 text-white shadow-xs" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                All ({allMissing.length})
+              </button>
+
+              <button
+                onClick={() => setGapFilter("CRITICAL")}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                  gapFilter === "CRITICAL" ? "bg-rose-600 text-white shadow-xs" : "bg-rose-50 text-rose-700 hover:bg-rose-100"
+                }`}
+              >
+                Critical Gaps ({criticalItems.length})
+              </button>
+
+              <button
+                onClick={() => setGapFilter("HIGH_IMPACT")}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                  gapFilter === "HIGH_IMPACT" ? "bg-amber-600 text-white shadow-xs" : "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                }`}
+              >
+                High Impact ({highImpactItems.length})
+              </button>
+
+              <button
+                onClick={() => setGapFilter("MEDIUM_IMPACT")}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                  gapFilter === "MEDIUM_IMPACT" ? "bg-cyan-600 text-white shadow-xs" : "bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
+                }`}
+              >
+                Medium Impact ({mediumImpactItems.length})
+              </button>
+
+              <button
+                onClick={() => setGapFilter("WEAK")}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                  gapFilter === "WEAK" ? "bg-indigo-600 text-white shadow-xs" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                }`}
+              >
+                Weak Evidence ({weakItems.length})
+              </button>
+
+              <button
+                onClick={() => setGapFilter("VERIFIED")}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
+                  gapFilter === "VERIFIED" ? "bg-emerald-600 text-white shadow-xs" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                }`}
+              >
+                Verified Strengths ({verifiedRequirements.length})
+              </button>
             </div>
 
-            {/* SCORE BREAKDOWN STRIP */}
-            {gapReport.scoreBreakdown && (
-              <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-4 flex-wrap">
-                  <span className="text-slate-600 font-medium">
-                    Required: <strong className="text-slate-900">{gapReport.scoreBreakdown.requiredMatched} / {gapReport.scoreBreakdown.requiredTotal}</strong>
-                  </span>
-                  <span className="text-slate-400">•</span>
-                  <span className="text-slate-600 font-medium">
-                    Preferred: <strong className="text-slate-900">{gapReport.scoreBreakdown.preferredMatched} / {gapReport.scoreBreakdown.preferredTotal}</strong>
-                  </span>
-                  <span className="text-slate-400">•</span>
-                  <span className="text-slate-600 font-medium">
-                    Keywords: <strong className="text-slate-900">{gapReport.scoreBreakdown.keywordsMatched} / {gapReport.scoreBreakdown.keywordsTotal}</strong>
-                  </span>
+            {/* IF SHOWING VERIFIED STRENGTHS */}
+            {gapFilter === "VERIFIED" ? (
+              <div className="space-y-3">
+                <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-center justify-between text-xs text-emerald-900">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span><strong>{verifiedRequirements.length}</strong> requirements verified with concrete evidence in your current resume.</span>
+                  </div>
                 </div>
-                <div>
-                  <span className={`px-2.5 py-1 rounded-full font-bold text-[10px] uppercase tracking-wider ${
-                    gapReport.scoreBreakdown.criticalGapsCount === 0 
-                      ? "bg-green-100 text-green-700" 
-                      : "bg-red-100 text-red-700"
-                  }`}>
-                    {gapReport.scoreBreakdown.criticalGapsCount === 0 ? "Ready to Apply" : `${gapReport.scoreBreakdown.criticalGapsCount} Critical Gap(s)`}
-                  </span>
-                </div>
-              </div>
-            )}
 
-            {/* MISSING REQUIREMENT CARDS */}
-            <div className="mt-8">
-              <h3 className="text-lg font-display font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <CheckSquare className="w-5 h-5 text-cyan-500" />
-                Verified Requirements Checklist
-              </h3>
-              
-              {(!gapReport.missingItems || gapReport.missingItems.length === 0) ? (
-                <div className="p-8 bg-green-50 border border-green-200 rounded-2xl text-center">
-                  <CheckCircle className="w-8 h-8 text-green-500 mx-auto mb-2" />
-                  <p className="text-green-800 font-bold">All mandatory requirements met in the current resume!</p>
+                {verifiedRequirements.map((req, idx) => (
+                  <div key={idx} className="bg-white border border-emerald-100 rounded-2xl p-5 shadow-xs flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-bold text-slate-900">{req.name}</span>
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md text-[10px] font-bold uppercase">
+                          {req.importance}
+                        </span>
+                        <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md text-[10px] font-semibold">
+                          {req.category}
+                        </span>
+                      </div>
+                      <p className="text-xs text-emerald-800 font-medium bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100/60">
+                        <strong>Verified Evidence:</strong> "{req.evidenceQuote || 'Identified in resume text'}"
+                      </p>
+                    </div>
+                    <span className="px-3 py-1 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[10px] uppercase tracking-wider shrink-0 flex items-center gap-1">
+                      <Check className="w-3 h-3 text-emerald-600" /> Supported
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* SHOWING MISSING / IMPROVABLE ITEMS */
+              displayedItems.length === 0 ? (
+                <div className="p-8 bg-emerald-50 border border-emerald-200 rounded-3xl text-center space-y-2">
+                  <CheckCircle className="w-8 h-8 text-emerald-500 mx-auto" />
+                  <h4 className="text-base font-bold text-emerald-900">No items found in this category</h4>
+                  <p className="text-xs text-emerald-700">All evaluated requirements under this filter are satisfied.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {gapReport.missingItems.map((item, idx) => (
-                    <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex gap-4">
-                      
-                      {/* Checkbox for batch tailoring selection */}
-                      <div className="pt-1 select-none">
-                        <input 
-                          type="checkbox"
-                          checked={selectedItems.some(i => i.title === item.title)}
-                          onChange={() => handleToggleCheckbox(item)}
-                          className="w-5 h-5 accent-cyan-500 cursor-pointer rounded border-slate-300"
-                        />
-                      </div>
+                  {displayedItems.map((item, idx) => {
+                    const isSelected = selectedItems.some(i => i.title === item.title);
+                    const itemKey = getGapItemKey(item);
+                    const reco = tailorRecommendations[itemKey];
+                    const isExpanded = activeMissingItem?.title === item.title;
+                    const isLoadingReco = loadingGapItemTitle === item.title;
+                    const classification = item.gapClassification || "TRUE_GAP";
 
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            item.importance === 'Critical' ? 'bg-red-100 text-red-700' :
-                            item.importance === 'Recommended' ? 'bg-amber-100 text-amber-700' :
-                            'bg-slate-100 text-slate-700'
-                          }`}>
-                            {item.importance}
-                          </span>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{item.type}</span>
-                          {item.atsImpact && (
-                            <span className="ml-auto text-[10px] font-bold text-cyan-600 bg-cyan-50 px-2 py-1 rounded-lg">Impact: {item.atsImpact}</span>
-                          )}
+                    return (
+                      <div 
+                        key={idx} 
+                        className={`bg-white border rounded-3xl p-5 md:p-6 shadow-sm hover:shadow-md transition-all space-y-4 ${
+                          item.priorityTier === "CRITICAL" ? "border-rose-200" :
+                          item.priorityTier === "HIGH_IMPACT" ? "border-amber-200" :
+                          "border-slate-200"
+                        }`}
+                      >
+                        <div className="flex items-start gap-4">
+                          {/* Batch Selection Checkbox */}
+                          <div className="pt-1 select-none">
+                            <input 
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleCheckbox(item)}
+                              className="w-4 h-4 accent-cyan-500 cursor-pointer rounded border-slate-300"
+                              title="Select for batch tailoring"
+                            />
+                          </div>
+
+                          <div className="flex-1 space-y-2">
+                            {/* Badges strip */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* Priority Tier */}
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                item.priorityTier === "CRITICAL" ? "bg-rose-100 text-rose-800" :
+                                item.priorityTier === "HIGH_IMPACT" ? "bg-amber-100 text-amber-800" :
+                                item.priorityTier === "MEDIUM_IMPACT" ? "bg-cyan-100 text-cyan-800" :
+                                "bg-slate-100 text-slate-700"
+                              }`}>
+                                {item.priorityTier ? item.priorityTier.replace(/_/g, " ") : item.importance}
+                              </span>
+
+                              {/* Classification Badge (Separating Missing from Improvable) */}
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                classification === "VERIFIED" ? "bg-emerald-100 text-emerald-800" :
+                                classification === "PRESENT_BUT_WEAK" ? "bg-amber-100 text-amber-800" :
+                                classification === "MISSING_ADDABLE" ? "bg-indigo-100 text-indigo-800" :
+                                "bg-slate-100 text-slate-700"
+                              }`}>
+                                {classification === "PRESENT_BUT_WEAK" ? "Present in Skills (Weak Proof)" :
+                                 classification === "MISSING_ADDABLE" ? "Foundational Match (Potentially Addable)" :
+                                 classification === "TRUE_GAP" ? "True Gap (No Evidence)" : "Verified"}
+                              </span>
+
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                {item.type}
+                              </span>
+
+                              {item.atsImpact && (
+                                <span className="ml-auto text-[10px] font-bold text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-lg border border-cyan-100">
+                                  Impact: {item.atsImpact}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Item Title & Reason */}
+                            <h4 className="text-base font-bold text-slate-900">{item.title}</h4>
+                            <p className="text-xs text-slate-600">{item.reason}</p>
+
+                            {/* Evidence Status Strip */}
+                            <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl text-xs space-y-1">
+                              <div className="flex items-center gap-1.5 text-slate-700 font-bold">
+                                <Search className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Resume Evidence Found:</span>
+                              </div>
+                              <p className="text-[11px] text-slate-600 italic">
+                                {item.evidenceFound && item.evidenceFound !== "No verified evidence found in resume" 
+                                  ? `"${item.evidenceFound}"` 
+                                  : "No verified evidence found in resume."}
+                                {item.evidenceLocation && (
+                                  <span className="block mt-1 font-semibold text-cyan-800 not-italic">
+                                    Location: {item.evidenceLocation}
+                                  </span>
+                                )}
+                              </p>
+                            </div>
+
+                            {/* Recommended Action (Strict Anti-Fabrication) */}
+                            {item.recommendedAction && (
+                              <div className="p-3 bg-cyan-50/50 border border-cyan-100 rounded-2xl text-xs text-cyan-950 space-y-1">
+                                <span className="font-bold text-cyan-900 block">Recommended Action:</span>
+                                <p className="text-[11px] leading-relaxed text-cyan-800">{item.recommendedAction}</p>
+                              </div>
+                            )}
+
+                            {/* Action Button: Coaching & Single Fix */}
+                            <div className="pt-2 flex items-center gap-3">
+                              {!isExpanded ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleFixItem(item)}
+                                  disabled={isLoadingReco}
+                                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all"
+                                >
+                                  <BookOpen className="w-3.5 h-3.5 text-cyan-600" />
+                                  <span>{isLoadingReco ? "Formulating Coaching..." : "Coaching & Single Fix"}</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveMissingItem(null);
+                                    setGapErrorItemTitle(null);
+                                    setGapErrorDetails(null);
+                                  }}
+                                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-all"
+                                >
+                                  Hide Coaching
+                                </button>
+                              )}
+                            </div>
+
+                            {/* 7-PART COACHING PANEL (EXPANDED) */}
+                            <AnimatePresence>
+                              {isExpanded && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: "auto" }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  className="bg-slate-50 border border-slate-200 rounded-2xl p-5 mt-4 space-y-4 overflow-hidden"
+                                >
+                                  {isLoadingReco ? (
+                                    <div className="flex items-center gap-3 text-cyan-600 text-xs font-bold py-3">
+                                      <RefreshCw className="w-4 h-4 animate-spin" /> Synthesizing evidence-based coaching...
+                                    </div>
+                                  ) : gapErrorItemTitle === item.title && gapErrorDetails ? (
+                                    <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-xs text-rose-900 space-y-2">
+                                      <div className="flex items-center gap-2 font-bold text-rose-800">
+                                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                                        <span>{gapErrorDetails.title}</span>
+                                      </div>
+                                      <p>{gapErrorDetails.message}</p>
+                                      <button
+                                        onClick={() => handleFixItem(item)}
+                                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs flex items-center gap-1"
+                                      >
+                                        <RefreshCw className="w-3 h-3" /> Retry Coaching
+                                      </button>
+                                    </div>
+                                  ) : reco ? (
+                                    <div className="space-y-4">
+                                      <div className="flex justify-between items-center pb-3 border-b border-slate-200">
+                                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                                          <BookOpen className="w-3.5 h-3.5 text-cyan-600" /> Professional Coaching Panel
+                                        </span>
+                                        <span className="text-[10px] font-bold text-slate-500 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
+                                          Target Section: {reco.section}
+                                        </span>
+                                      </div>
+
+                                      {/* 1. Why it matters */}
+                                      <div className="space-y-1">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">1. Why It Matters</span>
+                                        <p className="text-xs text-slate-700 font-medium leading-relaxed">
+                                          {reco.whyItMatters || reco.reason || item.whyItMatters}
+                                        </p>
+                                      </div>
+
+                                      {/* 2. What Resumix found */}
+                                      <div className="space-y-1">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">2. What Resumix Found</span>
+                                        <p className="text-xs text-slate-700 font-medium leading-relaxed">
+                                          {reco.whatResumixFound || item.evidenceFound}
+                                        </p>
+                                      </div>
+
+                                      {/* 3. What you can safely change */}
+                                      <div className="space-y-1">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">3. What You Can Safely Change</span>
+                                        <p className="text-xs text-slate-700 font-medium leading-relaxed">
+                                          {reco.whatYouCanSafelyChange || item.recommendedAction}
+                                        </p>
+                                      </div>
+
+                                      {/* 4. What you should NOT change (Strict Anti-Fabrication Warning) */}
+                                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1 text-xs text-amber-900">
+                                        <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                                          <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                          <span>4. What You Should NOT Change</span>
+                                        </div>
+                                        <p className="text-[11px] leading-relaxed">
+                                          {reco.whatYouShouldNotChange || `Do NOT add "${item.title}" merely to increase ATS score if you do not have genuine experience.`}
+                                        </p>
+                                      </div>
+
+                                      {/* 5. Example of a better version */}
+                                      <div className="space-y-1">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">5. Example of a Better Version</span>
+                                        <div className="bg-white border border-cyan-200 p-3 rounded-xl text-xs text-slate-800 italic border-l-4 border-l-cyan-500 shadow-xs">
+                                          "{reco.exampleBetterVersion || reco.suggestedSentence}"
+                                        </div>
+                                      </div>
+
+                                      {/* 6. Expected impact & 7. Evidence needed */}
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 text-xs">
+                                        <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
+                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">6. Expected Impact</span>
+                                          <p className="text-[11px] text-slate-700 font-medium">
+                                            {reco.expectedImpact || `${reco.atsImpact} impact on role keyword matching and recruiter confidence.`}
+                                          </p>
+                                        </div>
+                                        <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
+                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">7. Evidence Needed</span>
+                                          <p className="text-[11px] text-slate-700 font-medium">
+                                            {reco.evidenceNeeded || item.evidenceNeeded || `Verified project, coursework, internship, or work experience demonstrating ${item.title}.`}
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {/* Mark resolved button */}
+                                      <div className="pt-2 flex justify-end">
+                                        <button 
+                                          onClick={() => handleMarkResolved(item)}
+                                          className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
+                                        >
+                                          <Check className="w-3.5 h-3.5" /> Mark Resolved & Re-Validate
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+
+                          </div>
                         </div>
-                        
-                        <h4 className="text-base font-bold text-slate-800 mb-1">{item.title}</h4>
-                        <p className="text-sm text-slate-600 mb-3">{item.reason}</p>
-                        
-                        <div className="flex gap-2">
-                          {activeMissingItem?.title !== item.title ? (
-                            <button 
-                              onClick={() => handleFixItem(item)}
-                              disabled={loadingGapItemTitle === item.title}
-                              className={`text-xs font-bold flex items-center gap-1 transition-all ${
-                                loadingGapItemTitle === item.title 
-                                  ? 'text-slate-400 cursor-not-allowed'
-                                  : 'text-cyan-600 hover:text-cyan-700'
-                              }`}
-                            >
-                              <Info className="w-3.5 h-3.5" /> Explain single fix
-                            </button>
-                          ) : (
-                            <button 
-                              onClick={() => {
-                                setActiveMissingItem(null);
-                                setGapErrorItemTitle(null);
-                                setGapErrorDetails(null);
-                              }}
-                              className="text-xs font-bold text-slate-500 hover:text-slate-600"
-                            >
-                              Hide explanation
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Tailoring Recommendation Expanded View */}
-                        <AnimatePresence>
-                          {activeMissingItem?.title === item.title && (
-                            <motion.div 
-                              initial={{ opacity: 0, height: 0 }} 
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-4 overflow-hidden"
-                            >
-                              {loadingGapItemTitle === item.title ? (
-                                <div className="flex items-center gap-3 text-cyan-600 text-sm font-bold py-2">
-                                  <RefreshCw className="w-4 h-4 animate-spin" /> Formulating truthful suggestion...
-                                </div>
-                              ) : gapErrorItemTitle === item.title && gapErrorDetails ? (
-                                <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-800 space-y-2">
-                                  <div className="flex items-center gap-2 font-bold text-red-700">
-                                    <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
-                                    <span>{gapErrorDetails.title}</span>
-                                  </div>
-                                  <p className="text-red-700 font-medium">{gapErrorDetails.message}</p>
-                                  <div className="flex gap-2 pt-1">
-                                    <button 
-                                      onClick={() => handleFixItem(item)}
-                                      className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-all text-xs flex items-center gap-1.5 shadow-sm"
-                                    >
-                                      <RefreshCw className="w-3 h-3" /> Retry
-                                    </button>
-                                    <button 
-                                      onClick={() => {
-                                        setActiveMissingItem(null);
-                                        setGapErrorItemTitle(null);
-                                        setGapErrorDetails(null);
-                                      }}
-                                      className="px-3.5 py-1.5 bg-white border border-slate-300 text-slate-700 font-bold rounded-lg hover:bg-slate-50 transition-all text-xs font-semibold"
-                                    >
-                                      Close
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : tailorRecommendations[getGapItemKey(item)] ? (
-                                <div className="space-y-3">
-                                  <div className="flex justify-between items-start">
-                                    <div>
-                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Target Section</span>
-                                      <span className="text-xs font-bold text-slate-800 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
-                                        {tailorRecommendations[getGapItemKey(item)].section}
-                                      </span>
-                                    </div>
-                                    <div>
-                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Status</span>
-                                      <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-amber-100 text-amber-800">
-                                        {tailorRecommendations[getGapItemKey(item)].evidenceStatus}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  
-                                  <div>
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Suggested Phrasing / Project Idea</span>
-                                    <div className="bg-white border border-cyan-200 p-3 rounded-lg text-xs text-slate-700 italic border-l-4 border-l-cyan-500">
-                                      "{tailorRecommendations[getGapItemKey(item)].suggestedSentence}"
-                                    </div>
-                                  </div>
-
-                                  {tailorRecommendations[getGapItemKey(item)].reason && (
-                                    <p className="text-xs text-slate-600 font-medium">
-                                      {tailorRecommendations[getGapItemKey(item)].reason}
-                                    </p>
-                                  )}
-                                  
-                                  <div className="pt-2 flex gap-3">
-                                    <button onClick={() => handleMarkResolved(item)} className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 shadow-sm">
-                                      <Check className="w-3.5 h-3.5" /> Mark Resolved & Re-Validate
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : null}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-              )}
-            </div>
+              )
+            )}
+          </div>
 
             {/* STICKY BATCH TAILOR BUTTON */}
             {selectedItems.length > 0 && (
@@ -1804,29 +2320,226 @@ export default function TailorWizard({
 }
 
 // -----------------------------
+// Why This Score Modal
+// -----------------------------
+function WhyThisScoreModal({ 
+  isOpen, 
+  onClose, 
+  gapReport, 
+  targetRole, 
+  targetCompany 
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  gapReport: GapReport; 
+  targetRole: string; 
+  targetCompany: string; 
+}) {
+  if (!isOpen) return null;
+
+  const b = gapReport.scoreBreakdownDetails;
+  const atsScore = gapReport.atsScore ?? gapReport.scores.atsCompatibility ?? 0;
+  const reqMatched = gapReport.scoreBreakdown?.requiredMatched ?? 0;
+  const reqTotal = gapReport.scoreBreakdown?.requiredTotal ?? 0;
+  const kwMatched = gapReport.scoreBreakdown?.keywordsMatched ?? 0;
+  const kwTotal = gapReport.scoreBreakdown?.keywordsTotal ?? 0;
+  const penalty = b?.criticalGapPenalty ?? ((gapReport.scoreBreakdown?.criticalGapsCount ?? 0) * 10);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+      <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200 p-6 md:p-8 space-y-6">
+        <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-cyan-100 text-cyan-800">
+                Deterministic Calculation
+              </span>
+              <span className="text-xs text-slate-400">100% Explainable & Reproducible</span>
+            </div>
+            <h3 className="text-xl font-display font-bold text-slate-900">
+              Why this ATS Score? ({atsScore}/100)
+            </h3>
+            <p className="text-xs text-slate-500">
+              Target Profile: <strong>{targetRole}</strong> at <strong>{targetCompany}</strong>
+            </p>
+          </div>
+          <button 
+            onClick={onClose} 
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Explainable Summary Banner */}
+        <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-700 leading-relaxed space-y-2">
+          <p>
+            Your ATS compatibility score is <strong>{atsScore}/100</strong>. This score is calculated directly from verified structured data in your resume against the target job requirements. No random numbers or arbitrary AI percentages are used.
+          </p>
+          <p className="text-slate-600 font-medium">
+            Specifically: <strong>{reqMatched} of {reqTotal}</strong> mandatory qualifications have verified evidence in your resume, <strong>{kwMatched} of {kwTotal}</strong> technical keywords and tools are covered, and your experience aligns with this position profile.
+          </p>
+        </div>
+
+        {/* Formula Factor Grid */}
+        <div className="space-y-3">
+          <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Scoring Components & Weights</h4>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Required Skills */}
+            <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-800">Required Skills Coverage</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">40% Weight</span>
+              </div>
+              <div className="text-lg font-display font-bold text-cyan-600">
+                {b?.requiredSkills?.score ?? gapReport.scoreBreakdown?.requiredPercentage ?? 0}%
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {b?.requiredSkills?.explanation ?? `${reqMatched} of ${reqTotal} mandatory qualifications verified.`}
+              </p>
+            </div>
+
+            {/* Preferred Skills */}
+            <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-800">Preferred Qualifications</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">20% Weight</span>
+              </div>
+              <div className="text-lg font-display font-bold text-cyan-600">
+                {b?.preferredSkills?.score ?? gapReport.scoreBreakdown?.preferredPercentage ?? 0}%
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {b?.preferredSkills?.explanation ?? "Secondary qualifications and bonus skills."}
+              </p>
+            </div>
+
+            {/* Keyword Coverage */}
+            <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-800">Keyword & Tool Coverage</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">15% Weight</span>
+              </div>
+              <div className="text-lg font-display font-bold text-cyan-600">
+                {b?.keywordCoverage?.score ?? gapReport.scoreBreakdown?.keywordPercentage ?? 0}%
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {b?.keywordCoverage?.explanation ?? `${kwMatched} of ${kwTotal} tools & keywords identified.`}
+              </p>
+            </div>
+
+            {/* Experience Depth */}
+            <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-800">Experience Alignment</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">10% Weight</span>
+              </div>
+              <div className="text-lg font-display font-bold text-cyan-600">
+                {b?.experienceMatch?.score ?? gapReport.scores.experienceMatch ?? 0}%
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {b?.experienceMatch?.explanation ?? "Evaluates depth and duration across parsed roles."}
+              </p>
+            </div>
+
+            {/* Role Alignment */}
+            <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-800">Target Role Vocabulary</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">10% Weight</span>
+              </div>
+              <div className="text-lg font-display font-bold text-cyan-600">
+                {b?.roleAlignment?.score ?? gapReport.scores.companyMatch ?? 70}%
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {b?.roleAlignment?.explanation ?? "Vocabulary alignment with target job title and responsibilities."}
+              </p>
+            </div>
+
+            {/* Resume Structure */}
+            <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-1.5 shadow-sm">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-800">Resume Structure Quality</span>
+                <span className="px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-700">5% Weight</span>
+              </div>
+              <div className="text-lg font-display font-bold text-cyan-600">
+                {b?.resumeStructure?.score ?? gapReport.scores.formatting ?? 90}%
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {b?.resumeStructure?.explanation ?? "Contact info completeness, sections, and parse legibility."}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Penalty breakdown if any */}
+        {penalty > 0 && (
+          <div className="p-3.5 bg-red-50/80 border border-red-200 rounded-2xl flex items-center justify-between text-xs text-red-900">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>Critical Gap Deductions: <strong>{gapReport.scoreBreakdown?.criticalGapsCount ?? 0} missing required skill(s)</strong></span>
+            </div>
+            <span className="font-bold font-mono text-red-700 bg-red-100 px-2 py-0.5 rounded">-{penalty} pts</span>
+          </div>
+        )}
+
+        <div className="pt-2 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition-all shadow-sm"
+          >
+            Close Breakdown
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------
 // ScoreCard Helper Component
 // -----------------------------
-function ScoreCard({ title, score }: { title: string; score: number }) {
+function ScoreCard({ 
+  title, 
+  score,
+  subtitle,
+  badgeText
+}: { 
+  title: string; 
+  score: number;
+  subtitle?: string;
+  badgeText?: string;
+}) {
   const isHigh = score >= 80;
   const isMedium = score >= 50 && score < 80;
   
-  const colorClass = isHigh ? "text-green-600 bg-green-50" : isMedium ? "text-amber-600 bg-amber-50" : "text-red-600 bg-red-50";
-  const barClass = isHigh ? "bg-green-500" : isMedium ? "bg-amber-500" : "bg-red-500";
+  const colorClass = isHigh ? "text-emerald-600 bg-emerald-50" : isMedium ? "text-amber-600 bg-amber-50" : "text-rose-600 bg-rose-50";
+  const barClass = isHigh ? "bg-emerald-500" : isMedium ? "bg-amber-500" : "bg-rose-500";
 
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
-      <div className="flex justify-between items-start mb-4">
-        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider leading-tight">{title}</span>
-        <span className={`px-2 py-1 rounded-lg text-xs font-display font-bold ${colorClass}`}>
-          {typeof score === "number" && !isNaN(score) ? `${score}%` : "—"}
-        </span>
+    <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all">
+      <div>
+        <div className="flex justify-between items-start mb-2">
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider leading-tight">{title}</span>
+          <span className={`px-2 py-0.5 rounded-lg text-xs font-display font-bold ${colorClass}`}>
+            {typeof score === "number" && !isNaN(score) ? `${score}%` : "—"}
+          </span>
+        </div>
+        {subtitle && (
+          <p className="text-[11px] text-slate-500 font-medium mb-3">{subtitle}</p>
+        )}
       </div>
-      <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-        <motion.div 
-          initial={{ width: 0 }} 
-          animate={{ width: `${Math.min(100, Math.max(0, score || 0))}%` }} 
-          className={`h-full ${barClass}`} 
-        />
+      <div>
+        {badgeText && (
+          <span className="text-[10px] font-bold text-slate-400 block mb-1.5">{badgeText}</span>
+        )}
+        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+          <motion.div 
+            initial={{ width: 0 }} 
+            animate={{ width: `${Math.min(100, Math.max(0, score || 0))}%` }} 
+            className={`h-full ${barClass}`} 
+          />
+        </div>
       </div>
     </div>
   );

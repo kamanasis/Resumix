@@ -1,5 +1,5 @@
-import { ParsedResume } from "../types";
-import { normalizeTechnologyName, areTechnologiesEquivalent } from "./requirementEngine";
+import type { ParsedResume } from "../types.ts";
+import { normalizeTechnologyName, areTechnologiesEquivalent } from "./requirementEngine.ts";
 
 // ============================================================================
 // RESUMIX STAGE 4: DETERMINISTIC POST-GENERATION FACTUAL VALIDATOR

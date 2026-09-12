@@ -253,6 +253,61 @@ export interface RequirementProfile {
   leadershipExpectations: string;
 }
 
+export type GapClassification = 
+  | "VERIFIED"
+  | "PRESENT_BUT_WEAK"
+  | "MISSING_ADDABLE"
+  | "TRUE_GAP";
+
+export type PriorityTier = 
+  | "CRITICAL"
+  | "HIGH_IMPACT"
+  | "MEDIUM_IMPACT"
+  | "LOW_IMPACT";
+
+export interface ScoreConfidence {
+  level: "HIGH_CONFIDENCE" | "MEDIUM_CONFIDENCE" | "LOW_CONFIDENCE";
+  score: number;
+  reason: string;
+  isJdLimited: boolean;
+  factors: {
+    resumeExtractionQuality: string;
+    jobDescriptionCompleteness: string;
+    evidenceAvailability: string;
+  };
+}
+
+export interface ApplicationReadiness {
+  status: "READY_TO_APPLY" | "NEEDS_MINOR_IMPROVEMENTS" | "NEEDS_SIGNIFICANT_OPTIMIZATION" | "LOW_MATCH";
+  headline: string;
+  reasons: Array<{ type: "positive" | "warning" | "neutral"; text: string }>;
+}
+
+export interface HighestImpactAction {
+  rank: number;
+  title: string;
+  category: string;
+  whyItMatters: string;
+  actionableTip: string;
+  effort: "Low" | "Medium" | "High";
+}
+
+export interface ResumeQualityAudit {
+  overallScore: number;
+  parsingConfidence: number;
+  checks: Array<{ name: string; status: "PASS" | "WARN" | "INFO"; detail: string }>;
+}
+
+export interface ScoreBreakdownDetails {
+  requiredSkills: { score: number; weight: number; matched: number; total: number; explanation: string };
+  preferredSkills: { score: number; weight: number; matched: number; total: number; explanation: string };
+  keywordCoverage: { score: number; weight: number; matched: number; total: number; explanation: string };
+  experienceMatch: { score: number; weight: number; explanation: string };
+  roleAlignment: { score: number; weight: number; explanation: string };
+  resumeStructure: { score: number; weight: number; explanation: string };
+  criticalGapPenalty: number;
+}
+
 export interface MissingItem {
   id: string;
   type: "Skill" | "ATS Keyword" | "Project" | "Achievement" | "Responsibility" | "Certification" | "Technology" | "Grammar" | "Formatting" | "Experience";
@@ -263,6 +318,13 @@ export interface MissingItem {
   atsImpact: string;
   recruiterImpact: "High" | "Medium" | "Low";
   confidenceScore: number;
+  gapClassification?: GapClassification;
+  priorityTier?: PriorityTier;
+  evidenceFound?: string;
+  evidenceLocation?: string;
+  recommendedAction?: string;
+  whyItMatters?: string;
+  evidenceNeeded?: string;
 }
 
 export interface GapReport {
@@ -274,12 +336,18 @@ export interface GapReport {
   
   missingItems: MissingItem[];
   
-  // Stage 3 Explainable breakdowns & structured gaps
+  // Explainable breakdowns & structured gaps
   atsScore?: number;
   targetMatchScore?: number;
   scoreBreakdown?: ScoreBreakdown;
   categorizedGaps?: CategorizedGaps;
   completionState?: CompletionState;
+
+  scoreConfidence?: ScoreConfidence;
+  applicationReadiness?: ApplicationReadiness;
+  highestImpactActions?: HighestImpactAction[];
+  resumeQualityAudit?: ResumeQualityAudit;
+  scoreBreakdownDetails?: ScoreBreakdownDetails;
 
   // ATS Analysis
   atsPresent: string[];
@@ -313,6 +381,13 @@ export interface TailorRecommendation {
   reason: string;
   atsImpact: string;
   confidence: number;
+  whyItMatters?: string;
+  whatResumixFound?: string;
+  whatYouCanSafelyChange?: string;
+  whatYouShouldNotChange?: string;
+  exampleBetterVersion?: string;
+  expectedImpact?: string;
+  evidenceNeeded?: string;
 }
 
 // Stage 4 Types: Evidence-Based Tailoring & Provenance
