@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   ResumeFile, 
   GapReport, 
@@ -27,6 +27,11 @@ interface TailorWizardProps {
   userId: string;
   selectedResume: ResumeFile | null;
   onAnalysisCreated: () => void;
+  initialJobContext?: {
+    company?: string;
+    role?: string;
+    jobDescription?: string;
+  } | null;
 }
 
 function mapFrontendAiError(errorCode?: string, errorMsg?: string): { title: string; message: string } {
@@ -109,12 +114,27 @@ export default function TailorWizard({
   userId,
   selectedResume,
   onAnalysisCreated,
+  initialJobContext,
 }: TailorWizardProps) {
   // Input states
-  const [targetCompany, setTargetCompany] = useState("");
-  const [targetRole, setTargetRole] = useState("");
+  const [targetCompany, setTargetCompany] = useState(initialJobContext?.company || "");
+  const [targetRole, setTargetRole] = useState(initialJobContext?.role || "");
   const [experienceLevel, setExperienceLevel] = useState("1–2 years");
-  const [jobDescription, setJobDescription] = useState("");
+  const [jobDescription, setJobDescription] = useState(initialJobContext?.jobDescription || "");
+
+  useEffect(() => {
+    if (initialJobContext) {
+      if (initialJobContext.company) setTargetCompany(initialJobContext.company);
+      if (initialJobContext.role) setTargetRole(initialJobContext.role);
+      if (initialJobContext.jobDescription) setJobDescription(initialJobContext.jobDescription);
+      setStep("SETUP");
+      setGapReport(null);
+      setFrozenProfile(null);
+      setBatchResult(null);
+      setErrorDetails({ title: "", message: "" });
+      setDashboardTab("checklist");
+    }
+  }, [initialJobContext]);
 
   // Universal Job Ingestion state
   const [jobUrl, setJobUrl] = useState("");

@@ -7,7 +7,7 @@
     "unknown": 0,
     "refusals": 0,
     "marks": 0,
-    "sessions": 3,
+    "sessions": 4,
     "tokensReturned": 1569,
     "drivingMs": 280
   },
@@ -25,6 +25,21 @@
         "sessions": 3,
         "tokensReturned": 1569,
         "drivingMs": 280
+      }
+    },
+    {
+      "date": "2026-09-14",
+      "counts": {
+        "calls": 0,
+        "verdicts": 0,
+        "passed": 0,
+        "failed": 0,
+        "unknown": 0,
+        "refusals": 0,
+        "marks": 0,
+        "sessions": 1,
+        "tokensReturned": 0,
+        "drivingMs": 0
       }
     }
   ],

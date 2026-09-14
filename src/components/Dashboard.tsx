@@ -62,6 +62,13 @@ export default function Dashboard({ user }: DashboardProps) {
   const [analysesLoading, setAnalysesLoading] = useState(true);
   const [gapReportsLoading, setGapReportsLoading] = useState(true);
 
+  const [preloadedJobContext, setPreloadedJobContext] = useState<{
+    company?: string;
+    role?: string;
+    jobDescription?: string;
+    resumeId?: string;
+  } | null>(null);
+
   // Sync uploaded resumes from Firestore
   useEffect(() => {
     setResumesLoading(true);
@@ -212,6 +219,42 @@ export default function Dashboard({ user }: DashboardProps) {
       localStorage.setItem(`resumix_selected_resume_${user.uid}`, id);
     } catch {}
     setActiveTab("tailor");
+  };
+
+  const handleOpenInTailor = (context: {
+    company?: string;
+    role?: string;
+    jobDescription?: string;
+    resumeId?: string;
+  }) => {
+    if (context.resumeId) {
+      const matched = resumes.find(r => r.id === context.resumeId);
+      if (matched) {
+        setSelectedResumeId(context.resumeId);
+        try {
+          localStorage.setItem(`resumix_selected_resume_${user.uid}`, context.resumeId);
+        } catch {}
+      }
+    }
+    setPreloadedJobContext({ ...context });
+    setActiveTab("tailor");
+  };
+
+  const handleTrackApplication = (context: {
+    company?: string;
+    role?: string;
+    resumeId?: string;
+  }) => {
+    if (context.resumeId) {
+      const matched = resumes.find(r => r.id === context.resumeId);
+      if (matched) {
+        setSelectedResumeId(context.resumeId);
+        try {
+          localStorage.setItem(`resumix_selected_resume_${user.uid}`, context.resumeId);
+        } catch {}
+      }
+    }
+    setActiveTab("applications");
   };
 
   return (
@@ -563,6 +606,7 @@ service cloud.firestore {
                 userId={user.uid}
                 selectedResume={getSelectedResume()}
                 onAnalysisCreated={() => {}}
+                initialJobContext={preloadedJobContext}
               />
             ) : activeTab === "fresher" ? (
               <FresherHub
@@ -575,20 +619,17 @@ service cloud.firestore {
                 resumes={resumes}
               />
             ) : (
-              <div className="space-y-4 flex-1 flex flex-col">
-                <div>
-                  <h2 className="text-slate-800 font-display font-bold text-xl mb-1">
-                    Tailored Optimization History
-                  </h2>
-                  <p className="text-slate-500 text-xs">
-                    Review and extract previously aligned ATS resume configurations
-                  </p>
-                </div>
-
+              <div className="flex-1 flex flex-col">
                 <AnalysisHistory
                   analyses={analyses}
+                  gapReports={gapReports}
+                  resumes={resumes}
                   userId={user.uid}
+                  selectedResumeId={selectedResumeId}
+                  onSelectResume={handleResumeSelect}
                   onRefresh={() => {}}
+                  onOpenInTailor={handleOpenInTailor}
+                  onTrackApplication={handleTrackApplication}
                 />
               </div>
             )}
