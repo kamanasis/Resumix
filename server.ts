@@ -30,18 +30,31 @@ import {
 import {
   validateExportReadiness
 } from "./src/lib/exportValidator";
-import { globalJobIngestionEngine } from "./src/lib/jobEngine";
+import { 
+  globalJobIngestionEngine,
+  globalJobSnapshotStore,
+  isSafeExternalUrl
+} from "./src/lib/jobEngine";
 import { 
   globalIntelligenceEngine, 
   globalCompanyIntelligenceStore,
-  globalRoleIntelligenceStore 
+  globalRoleIntelligenceStore,
+  globalMarketAggregationEngine 
 } from "./src/lib/intelligenceEngine";
 import { 
   globalApplicationStore, 
   globalOutcomeIntelligenceEngine, 
   captureScoreSnapshot 
 } from "./src/lib/outcomeEngine";
-import { ParsedResume } from "./src/types";
+import {
+  globalLearningEventStore,
+  globalFeatureExtractor,
+  globalAdaptiveModel,
+  globalAdaptiveRecommendationEngine,
+  globalPredictiveAlignmentEngine,
+  assertAtsScoreInvariance
+} from "./src/lib/learningEngine";
+import { ParsedResume, MarketObservationWindow, ApplicationOutcomeType } from "./src/types";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -2170,6 +2183,332 @@ app.get("/api/outcome-intelligence/role/:roleTitle", async (req, res) => {
     return sendError(res, "ROLE_OUTCOME_FAILED", "Failed to calculate role outcome analytics.", 500, error.message);
   }
 });
+
+// ============================================================================
+// ADAPTIVE LEARNING & ML INTELLIGENCE API ROUTES
+// ============================================================================
+
+app.post("/api/learning/event", async (req, res) => {
+  try {
+    const { eventType, userId } = req.body;
+    if (!eventType || typeof eventType !== "string") {
+      return sendError(res, "INVALID_EVENT_TYPE", "eventType is required.", 400);
+    }
+    const event = await globalLearningEventStore.recordEvent({
+      ...req.body,
+      userId: userId || "anonymous"
+    });
+    return sendSuccess(res, event, 201);
+  } catch (error: any) {
+    return sendError(res, "EVENT_RECORDING_FAILED", "Failed to record learning event.", 500, error.message);
+  }
+});
+
+app.post("/api/learning/recommendations", async (req, res) => {
+  try {
+    const { userId, gapReport, frozenProfile, parsedResume, companyIntel, roleIntel } = req.body;
+    const recommendations = globalAdaptiveRecommendationEngine.generateRecommendations({
+      userId: userId || "anonymous",
+      gapReport,
+      frozenProfile,
+      parsedResume,
+      companyIntel,
+      roleIntel
+    });
+    return sendSuccess(res, recommendations);
+  } catch (error: any) {
+    return sendError(res, "RECOMMENDATIONS_FAILED", "Failed to generate adaptive recommendations.", 500, error.message);
+  }
+});
+
+app.post("/api/learning/feedback", async (req, res) => {
+  try {
+    const { userId, targetItem, feedback, roleFamily, skillName, recommendationType } = req.body;
+    if (!feedback || !["USEFUL", "NOT_USEFUL", "ACCEPTED", "REJECTED"].includes(feedback)) {
+      return sendError(res, "INVALID_FEEDBACK", "feedback must be USEFUL, NOT_USEFUL, ACCEPTED, or REJECTED.", 400);
+    }
+    const event = await globalLearningEventStore.recordEvent({
+      userId: userId || "anonymous",
+      eventType: "USER_FEEDBACK_SUBMITTED",
+      skillName: skillName || targetItem,
+      roleFamily,
+      recommendationType,
+      outcome: feedback
+    });
+    return sendSuccess(res, { recorded: true, event });
+  } catch (error: any) {
+    return sendError(res, "FEEDBACK_RECORDING_FAILED", "Failed to record recommendation feedback.", 500, error.message);
+  }
+});
+
+app.get("/api/learning/profile/:userId", (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) {
+      return sendError(res, "INVALID_USER_ID", "userId is required.", 400);
+    }
+    const profile = globalLearningEventStore.getUserLearningProfile(userId);
+    return sendSuccess(res, profile);
+  } catch (error: any) {
+    return sendError(res, "PROFILE_QUERY_FAILED", "Failed to retrieve user learning profile.", 500, error.message);
+  }
+});
+
+app.get("/api/learning/model-metadata", (_req, res) => {
+  try {
+    const metadata = globalLearningEventStore.getModelMetadata();
+    return sendSuccess(res, metadata);
+  } catch (error: any) {
+    return sendError(res, "METADATA_QUERY_FAILED", "Failed to retrieve learning model metadata.", 500, error.message);
+  }
+});
+
+// ============================================================================
+// REAL-WORLD JOB INTELLIGENCE & MARKET AGGREGATION API ROUTES
+// ============================================================================
+
+app.post("/api/jobs/ingest", async (req, res) => {
+  try {
+    const { url, rawText, company, role } = req.body;
+    if (url) {
+      if (!isSafeExternalUrl(url)) {
+        return sendError(res, "SSRF_DETECTED", "Target URL is private or restricted by security policy.", 400);
+      }
+      const result = await globalJobIngestionEngine.importJobUrl(url, company, role);
+      if (!result.success) {
+        return sendError(res, result.error?.code || "JOB_INGESTION_FAILED", result.error?.message || "Failed to ingest job from URL.", 400);
+      }
+      return sendSuccess(res, result, 201);
+    } else if (rawText) {
+      const result = await globalJobIngestionEngine.importJobText(rawText, company, role);
+      if (!result.success) {
+        return sendError(res, result.error?.code || "JOB_INGESTION_FAILED", result.error?.message || "Failed to ingest job text.", 400);
+      }
+      return sendSuccess(res, result, 201);
+    } else {
+      return sendError(res, "INVALID_INPUT", "Must provide either url or rawText for job ingestion.", 400);
+    }
+  } catch (error: any) {
+    return sendError(res, "JOB_INGESTION_ERROR", "Error ingesting job posting.", 500, error.message);
+  }
+});
+
+app.post("/api/jobs/import-url", async (req, res) => {
+  try {
+    const { url, companyName, roleTitle } = req.body;
+    if (!url || typeof url !== "string") {
+      return sendError(res, "INVALID_URL", "Valid HTTP/HTTPS job posting URL is required.", 400);
+    }
+    if (!isSafeExternalUrl(url)) {
+      return sendError(res, "SSRF_DETECTED", "Target URL is private or restricted by security policy.", 400);
+    }
+    const result = await globalJobIngestionEngine.importJobUrl(url, companyName, roleTitle);
+    if (!result.success) {
+      return sendError(res, result.error?.code || "JOB_IMPORT_FAILED", result.error?.message || "Failed to import job from URL.", 400);
+    }
+    return sendSuccess(res, result, 201);
+  } catch (error: any) {
+    return sendError(res, "JOB_IMPORT_ERROR", "Error importing job from URL.", 500, error.message);
+  }
+});
+
+app.post("/api/jobs/import-text", async (req, res) => {
+  try {
+    const { text, companyName, roleTitle } = req.body;
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
+      return sendError(res, "JOB_EXTRACTION_FAILED", "Job description text cannot be empty.", 400);
+    }
+    const result = await globalJobIngestionEngine.importJobText(text, companyName, roleTitle);
+    if (!result.success) {
+      return sendError(res, result.error?.code || "JOB_IMPORT_FAILED", result.error?.message || "Failed to import job from text.", 400);
+    }
+    return sendSuccess(res, result, 201);
+  } catch (error: any) {
+    return sendError(res, "JOB_IMPORT_ERROR", "Error importing job from text.", 500, error.message);
+  }
+});
+
+app.get("/api/jobs/:jobId/snapshots", (req, res) => {
+  try {
+    const { jobId } = req.params;
+    if (!jobId) {
+      return sendError(res, "INVALID_JOB_ID", "jobId is required.", 400);
+    }
+    const snapshots = globalJobIngestionEngine.getJobSnapshots(jobId);
+    return sendSuccess(res, { jobId, count: snapshots.length, snapshots });
+  } catch (error: any) {
+    return sendError(res, "SNAPSHOT_QUERY_FAILED", "Failed to retrieve job snapshots.", 500, error.message);
+  }
+});
+
+app.get("/api/market/role-trends", (req, res) => {
+  try {
+    const roleTitle = (req.query.roleTitle as string) || (req.query.role as string);
+    const companyName = (req.query.companyName as string) || (req.query.company as string);
+    const window = (req.query.window as MarketObservationWindow) || "12_MONTHS";
+
+    if (!roleTitle && !companyName) {
+      return sendError(res, "INVALID_INPUT", "Must provide roleTitle or companyName query parameter.", 400);
+    }
+
+    const allSnapshots = globalJobIngestionEngine.getAllSnapshots();
+    
+    // Filter matching items
+    let matchedItems = allSnapshots;
+    if (companyName) {
+      const compLower = companyName.toLowerCase().trim();
+      matchedItems = matchedItems.filter(item => 
+        (item.job.companyName || "").toLowerCase().includes(compLower)
+      );
+    }
+    if (roleTitle) {
+      const roleLower = roleTitle.toLowerCase().trim();
+      matchedItems = matchedItems.filter(item => 
+        (item.job.title || "").toLowerCase().includes(roleLower)
+      );
+    }
+
+    const aggregate = globalMarketAggregationEngine.buildMarketAggregate({
+      scope: companyName ? "COMPANY" : "ROLE_FAMILY",
+      targetIdentifier: companyName || roleTitle || "cross-market",
+      items: matchedItems,
+      window
+    });
+
+    const isColdStart = aggregate.totalPostingsObserved === 0;
+
+    return sendSuccess(res, {
+      aggregate,
+      isColdStart,
+      status: isColdStart ? "INSUFFICIENT_DATA" : "ACTIVE",
+      totalPostingsObserved: aggregate.totalPostingsObserved,
+      frequencies: aggregate.frequencies
+    });
+  } catch (error: any) {
+    return sendError(res, "MARKET_TRENDS_FAILED", "Failed to aggregate market role trends.", 500, error.message);
+  }
+});
+
+app.post("/api/outcome/record", async (req, res) => {
+  try {
+    const { applicationId, userId, outcome, notes, feedbackDate, confidence, evidenceSource } = req.body;
+    if (!applicationId || !outcome) {
+      return sendError(res, "INVALID_INPUT", "applicationId and outcome are required.", 400);
+    }
+
+    const updated = globalApplicationStore.updateApplication({
+      applicationId,
+      userId,
+      outcome: outcome as any,
+      outcomeDate: feedbackDate || new Date().toISOString(),
+      userNotes: notes,
+      confidence,
+      evidenceSource
+    });
+
+    // Also record learning event for feedback loop
+    await globalLearningEventStore.recordEvent({
+      userId: userId || updated.userId || "anonymous",
+      eventType: "OUTCOME_RECORDED",
+      outcome: outcome === "REJECTED" || outcome === "REJECTION_RECEIVED" ? "REJECTED" : "ACCEPTED",
+      roleFamily: updated.roleTitle,
+      recommendationType: "APPLICATION_OUTCOME",
+      metadata: { rawOutcome: String(outcome) }
+    });
+
+    return sendSuccess(res, { recorded: true, application: updated });
+  } catch (error: any) {
+    return sendError(res, "OUTCOME_RECORDING_FAILED", error.message || "Failed to record application outcome.", 500);
+  }
+});
+
+app.get("/api/outcome/analytics", (req, res) => {
+  try {
+    const roleTitle = req.query.roleTitle as string;
+    const companyName = req.query.companyName as string;
+    const userId = req.query.userId as string;
+
+    let analytics;
+    if (userId) {
+      analytics = globalOutcomeIntelligenceEngine.getPersonalAnalytics(userId);
+    } else if (companyName) {
+      analytics = globalOutcomeIntelligenceEngine.getCompanyAnalytics(companyName);
+    } else if (roleTitle) {
+      analytics = globalOutcomeIntelligenceEngine.getRoleAnalytics(roleTitle);
+    } else {
+      analytics = globalOutcomeIntelligenceEngine.getGlobalAnalytics();
+    }
+
+    // Minimum sample-size protection: N >= 15 verified outcome reports
+    const totalApplications = analytics.applicationCount || 0;
+    const meetsSampleSize = totalApplications >= 15;
+
+    if (!meetsSampleSize) {
+      return sendSuccess(res, {
+        insufficientSample: true,
+        status: "INSUFFICIENT_OUTCOME_DATA",
+        message: "Sample size too small to compute reliable outcome rates (minimum 15 verified reports required).",
+        sampleSize: totalApplications,
+        minimumRequired: 15,
+        analytics: {
+          applicationCount: totalApplications,
+          interviewRate: null,
+          offerRate: null,
+          rejectionRate: null,
+          evidenceStrength: "NONE",
+          datasetVersion: analytics.datasetVersion
+        }
+      });
+    }
+
+    return sendSuccess(res, {
+      insufficientSample: false,
+      status: "VERIFIED_OUTCOME_DATA",
+      sampleSize: totalApplications,
+      analytics
+    });
+  } catch (error: any) {
+    return sendError(res, "OUTCOME_ANALYTICS_FAILED", "Failed to retrieve outcome analytics.", 500, error.message);
+  }
+});
+
+app.post("/api/predictive/alignment", (req, res) => {
+  try {
+    const { 
+      candidateRequirements, 
+      targetRole, 
+      targetCompany, 
+      jobRequirements, 
+      atsScoreBefore 
+    } = req.body;
+
+    if (!targetRole) {
+      return sendError(res, "INVALID_INPUT", "targetRole is required.", 400);
+    }
+
+    // Assert ATS score invariance if ATS score was provided
+    if (typeof atsScoreBefore === "number") {
+      assertAtsScoreInvariance(atsScoreBefore, atsScoreBefore);
+    }
+
+    const alignment = globalPredictiveAlignmentEngine.calculateAlignment({
+      candidateMatchedRequirements: candidateRequirements || [],
+      jobRequirements: jobRequirements || [],
+      targetRole,
+      targetCompany
+    });
+
+    return sendSuccess(res, {
+      ...alignment,
+      atsScoreBefore: typeof atsScoreBefore === "number" ? atsScoreBefore : undefined,
+      scoreInvariant: true
+    });
+  } catch (error: any) {
+    return sendError(res, "ALIGNMENT_CALCULATION_FAILED", "Failed to compute predictive alignment.", 500, error.message);
+  }
+});
+
+
 
 // Process-level crash guards to prevent server termination on unhandled errors
 process.on("uncaughtException", (err) => {

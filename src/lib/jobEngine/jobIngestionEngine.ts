@@ -15,17 +15,12 @@ import {
   SmartRecruitersAdapter, 
   JSONLDAdapter, 
   SemanticHTMLAdapter, 
-  UserPastedAdapter 
+  UserPastedAdapter,
+  AdzunaAdapter,
+  USAJobsAdapter
 } from "./adapters";
 import { evaluateSnapshotCreation } from "./jobSnapshotManager";
 import { compareJobsForDeduplication } from "./jobDeduplicator";
-
-// ============================================================================
-// RESUMIX STAGE 6: UNIVERSAL JOB INGESTION ENGINE
-// ============================================================================
-// Orchestrates company resolution, adapter selection, network fetching,
-// fail-closed verification, deduplication, and immutable snapshot versioning.
-// ============================================================================
 
 export class JobIngestionEngine {
   private adapters: JobSourceAdapter[];
@@ -39,6 +34,8 @@ export class JobIngestionEngine {
       new AshbyAdapter(),
       new WorkableAdapter(),
       new SmartRecruitersAdapter(),
+      new AdzunaAdapter(),
+      new USAJobsAdapter(),
       new JSONLDAdapter(),
       new SemanticHTMLAdapter(),
       new UserPastedAdapter()
@@ -203,7 +200,43 @@ export class JobIngestionEngine {
   getJobSnapshots(jobId: string): JobSnapshot[] {
     return this.snapshotStore.get(jobId) || [];
   }
+
+  /**
+   * Retrieves all stored Jobs.
+   */
+  getAllJobs(): Job[] {
+    return Array.from(this.jobStore.values());
+  }
+
+  /**
+   * Retrieves all snapshots paired with their parent job.
+   */
+  getAllSnapshots(): { job: Job; snapshot: JobSnapshot }[] {
+    const results: { job: Job; snapshot: JobSnapshot }[] = [];
+    for (const [jobId, snapshots] of this.snapshotStore.entries()) {
+      const job = this.jobStore.get(jobId);
+      if (job) {
+        for (const snap of snapshots) {
+          results.push({ job, snapshot: snap });
+        }
+      }
+    }
+    return results;
+  }
 }
 
 // Global Singleton Instance
 export const globalJobIngestionEngine = new JobIngestionEngine();
+
+export const globalJobSnapshotStore = {
+  getSnapshots: (jobId: string): JobSnapshot[] => globalJobIngestionEngine.getJobSnapshots(jobId),
+  getSnapshot: (snapshotId: string): JobSnapshot | undefined => {
+    for (const item of globalJobIngestionEngine.getAllSnapshots()) {
+      if (item.snapshot.snapshotId === snapshotId || (item.snapshot as any).id === snapshotId) {
+        return item.snapshot;
+      }
+    }
+    return undefined;
+  },
+  getAllSnapshots: () => globalJobIngestionEngine.getAllSnapshots()
+};

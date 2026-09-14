@@ -484,10 +484,12 @@ export type JobSourceType =
   | "AGGREGATOR"
   | "WEB_JSON_LD"
   | "SEMANTIC_HTML"
-  | "USER_INPUT";
+  | "USER_INPUT"
+  | "USER_PASTE";
 
 export type JobConfidence =
   | "VERIFIED_ATS"
+  | "PUBLIC_ATS"
   | "PUBLIC_PAGE"
   | "USER_PROVIDED"
   | "LOW_CONFIDENCE";
@@ -500,6 +502,10 @@ export interface JobSourceReference {
   sourceDomain?: string;
   retrievedAt: string;
   sourceConfidence: JobConfidence;
+  sourceLastVerifiedAt?: string;
+  sourceHash?: string;
+  sourceQuote?: string;
+  sourceStatus?: "ACTIVE" | "EXPIRED" | "REMOVED" | "UNAVAILABLE" | "USER_SUPPLIED";
 }
 
 export interface CompanyEntity {
@@ -523,6 +529,8 @@ export type JobStatus =
   | "ACTIVE"
   | "EXPIRED"
   | "REMOVED"
+  | "UNAVAILABLE"
+  | "USER_SUPPLIED"
   | "UNKNOWN";
 
 export interface Job {
@@ -574,6 +582,9 @@ export interface JobSnapshot {
   requirements: TargetRequirement[];
   extractionStatus: JobExtractionStatus;
   evidenceQuality: number;
+  status?: JobStatus;
+  sourceLastVerifiedAt?: string;
+  sourceQuote?: string;
   createdAt: string;
 }
 
@@ -594,6 +605,7 @@ export interface JobSourceInput {
   company?: string;
   role?: string;
   rawText?: string;
+  rawHtml?: string;
   provider?: JobProvider;
 }
 
@@ -966,7 +978,14 @@ export type ApplicationOutcome =
   | "OFFER"
   | "HIRED"
   | "WITHDRAWN"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  | "APPLICATION_SUBMITTED"
+  | "INTERVIEW_RECEIVED"
+  | "ASSESSMENT_RECEIVED"
+  | "REJECTION_RECEIVED"
+  | "OFFER_RECEIVED"
+  | "USER_WITHDREW"
+  | "UNKNOWN_OUTCOME";
 
 export type ApplicationSource =
   | "USER_ENTERED"
@@ -1087,6 +1106,7 @@ export interface OutcomeSummaryAnalytics {
   eligibleCount: number;
   evidenceLevel: EvidenceStrength;
   applicationCount: number;
+  totalSubmissionsCount?: number;
   recruiterScreenCount: number;
   recruiterScreenRate: number; // 0 to 100%
   interviewCount: number;
@@ -1100,6 +1120,249 @@ export interface OutcomeSummaryAnalytics {
   withdrawnCount: number;
   unknownCount: number;
   correlations?: OutcomeCorrelation[];
+  disclaimer: string;
+}
+
+// ============================================================================
+// ADAPTIVE LEARNING & ML INTELLIGENCE TYPES
+// ============================================================================
+
+export type LearningEventType =
+  | "COMPANY_SEARCHED"
+  | "COMPANY_SELECTED"
+  | "ROLE_SEARCHED"
+  | "ROLE_SELECTED"
+  | "JD_ANALYZED"
+  | "RESUME_ANALYZED"
+  | "ATS_ANALYSIS_PERFORMED"
+  | "REQUIREMENT_PROFILE_GENERATED"
+  | "GAP_IDENTIFIED"
+  | "GAP_EXPLANATION_REQUESTED"
+  | "TAILORING_PERFORMED"
+  | "TAILORING_ACCEPTED"
+  | "TAILORING_REJECTED"
+  | "TAILORING_EDITED"
+  | "RECOMMENDATION_ACCEPTED"
+  | "RECOMMENDATION_REJECTED"
+  | "KEYWORD_ACCEPTED"
+  | "KEYWORD_REJECTED"
+  | "TARGET_CHANGED"
+  | "EXPORT_PERFORMED"
+  | "USER_FEEDBACK_SUBMITTED"
+  | "OUTCOME_RECORDED";
+
+export interface LearningEvent {
+  eventId: string;
+  userId: string;
+  eventType: LearningEventType;
+  timestamp: string;
+  companyId?: string;
+  companyName?: string;
+  roleId?: string;
+  roleTitle?: string;
+  roleFamily?: string;
+  specialization?: string | null;
+  seniority?: RoleSeniority;
+  requirementCategory?: RequirementCategory;
+  skillName?: string;
+  recommendationType?: string;
+  outcome?: "ACCEPTED" | "REJECTED" | "EDITED" | "VIEWED" | "USEFUL" | "NOT_USEFUL" | string;
+  confidence?: number;
+  modelVersion: string;
+  metadata?: Record<string, any>;
+}
+
+export interface LearningAggregate {
+  aggregateId: string;
+  scopeKey: string;
+  positiveSignals: number;
+  negativeSignals: number;
+  totalObservations: number;
+  weightedScore: number;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  updatedAt: string;
+}
+
+export type LearningModelStatus = "COLD_START" | "LEARNING" | "MATURE";
+
+export interface ModelMetadata {
+  modelVersion: string;
+  featureVersion: string;
+  trainingDataVersion: string;
+  totalEventsProcessed: number;
+  globalAcceptanceRate: number;
+  status: LearningModelStatus;
+  updatedAt: string;
+}
+
+export interface CompanyLearningFeatures {
+  companyCategory: string;
+  companySizeTier: string;
+  observedTechCount: number;
+  confidenceTier: string;
+  hiringFrequencyTier: string;
+}
+
+export interface RoleLearningFeatures {
+  roleFamily: string;
+  specialization: string | null;
+  seniority: RoleSeniority;
+  isTechnical: boolean;
+  marketFrequency: number;
+  isEmerging: boolean;
+}
+
+export interface MatchLearningFeatures {
+  requiredCoverage: number;
+  preferredCoverage: number;
+  keywordCoverage: number;
+  criticalGapCount: number;
+  evidenceConfidence: number;
+}
+
+export interface BehavioralLearningFeatures {
+  historicalAcceptanceRate: number;
+  historicalRejectionCount: number;
+  observationCount: number;
+  feedbackScore: number;
+}
+
+export interface LearningFeatureVector {
+  featureId: string;
+  companyFeatures: CompanyLearningFeatures;
+  roleFeatures: RoleLearningFeatures;
+  matchFeatures: MatchLearningFeatures;
+  behavioralFeatures: BehavioralLearningFeatures;
+  extractedAt: string;
+}
+
+export type RecommendationConfidenceTier = "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT_DATA";
+
+export type RecommendationPriority = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+
+export interface AdaptiveRecommendation {
+  id: string;
+  type: "GAP_PRIORITY" | "KEYWORD_EMPHASIS" | "SECTION_IMPROVEMENT" | "TAILORING_SAFEGUARD" | "ROLE_ALIGNMENT";
+  targetItem: string;
+  learnedPriority: RecommendationPriority;
+  evidenceScore: number;
+  roleWeight: number;
+  companyWeight: number;
+  behaviorScore: number;
+  recencyScore: number;
+  finalScore: number;
+  confidenceTier: RecommendationConfidenceTier;
+  confidenceScore: number;
+  reason: string;
+  evidence: string;
+  source: "ROLE_INTELLIGENCE" | "COMPANY_INTELLIGENCE" | "DETERMINISTIC_ATS" | "ADAPTIVE_LEARNING";
+  modelVersion: string;
+  status: "ACTIVE" | "DISMISSED" | "ACCEPTED";
+  feedback?: "USEFUL" | "NOT_USEFUL";
+}
+
+export interface UserLearningProfile {
+  userId: string;
+  topRoleFamilies: { family: string; count: number }[];
+  topSpecializations: { specialization: string; count: number }[];
+  totalAnalyses: number;
+  acceptanceRate: number;
+  frequentMissingSkills: { skill: string; count: number }[];
+  lastActiveAt: string;
+  updatedAt: string;
+}
+
+export interface AdaptiveIntelligenceResponse {
+  learningStatus: LearningModelStatus;
+  confidence: RecommendationConfidenceTier;
+  recommendations: AdaptiveRecommendation[];
+  prioritizedGaps: {
+    requirementName: string;
+    verifiedImportance: "REQUIRED" | "PREFERRED" | "OPTIONAL";
+    learnedPriority: RecommendationPriority;
+    confidence: RecommendationConfidenceTier;
+    reason: string;
+  }[];
+  highValueKeywords: {
+    keyword: string;
+    relevanceScore: number;
+    source: string;
+  }[];
+  userInsights?: {
+    primaryTargetRoleFamily?: string;
+    tailoringAcceptanceRate?: number;
+    suggestedFocusArea?: string;
+  };
+  modelVersion: string;
+  featureVersion: string;
+  generatedAt: string;
+  disclaimer: string;
+}
+
+// ============================================================================
+// REAL-WORLD JOB MARKET & OUTCOME INTELLIGENCE TYPES
+// ============================================================================
+
+export type MarketObservationWindow =
+  | "30_DAYS"
+  | "90_DAYS"
+  | "12_MONTHS"
+  | "HISTORICAL";
+
+export interface TimeDecayedRequirementFrequency {
+  canonicalName: string;
+  category: RequirementCategory;
+  observedCount: number;
+  requiredCount: number;
+  preferredCount: number;
+  optionalCount: number;
+  companiesObserved: number;
+  rolesObserved: number;
+  recentObservations: number;
+  historicalObservations: number;
+  recencyWeightedFrequency: number;
+  confidence: EvidenceStrength;
+}
+
+export interface MarketAggregate {
+  aggregateId: string;
+  scope: "ROLE_FAMILY" | "COMPANY" | "CROSS_MARKET";
+  targetIdentifier: string;
+  observationWindow: MarketObservationWindow;
+  totalPostingsObserved: number;
+  uniqueCompaniesCount: number;
+  frequencies: TimeDecayedRequirementFrequency[];
+  updatedAt: string;
+}
+
+export type ApplicationOutcomeType =
+  | "APPLICATION_SUBMITTED"
+  | "INTERVIEW_RECEIVED"
+  | "ASSESSMENT_RECEIVED"
+  | "REJECTION_RECEIVED"
+  | "OFFER_RECEIVED"
+  | "USER_WITHDREW"
+  | "UNKNOWN_OUTCOME";
+
+export interface OutcomeLearningSignal {
+  roleFamily: string;
+  canonicalCompany: string;
+  scoreRange: string;
+  outcomeType: ApplicationOutcomeType;
+  verifiedAt: string;
+}
+
+export interface PredictiveAlignmentScore {
+  estimatedAlignmentScore: number; // 0-100
+  modelConfidence: RecommendationConfidenceTier;
+  alignmentLevel: "STRONG" | "MODERATE" | "DEVELOPING" | "INSUFFICIENT_DATA";
+  breakdown: {
+    directJobCoverage: number;
+    companyObservedWeight: number;
+    roleMarketAlignment: number;
+    outcomeSignalBonus: number;
+  };
   disclaimer: string;
 }
 

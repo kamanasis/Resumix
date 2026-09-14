@@ -87,6 +87,76 @@
         "lastUpdatedAt": { "type": "string" }
       },
       "required": ["id", "roleId", "normalizedRole", "roleFamily", "seniority", "confidence", "status"]
+    },
+    "LearningEvent": {
+      "title": "Learning Event Record",
+      "description": "User interaction, tailoring decision, or recommendation feedback event with sanitized metadata",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string" },
+        "userId": { "type": "string" },
+        "eventType": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "modelVersion": { "type": "string" }
+      },
+      "required": ["eventId", "userId", "eventType", "timestamp", "modelVersion"]
+    },
+    "LearningAggregate": {
+      "title": "Aggregated Learning Signal",
+      "description": "Non-PII empirical counts and weights for role, technology, and recommendation patterns",
+      "type": "object",
+      "properties": {
+        "aggregateId": { "type": "string" },
+        "scopeKey": { "type": "string" },
+        "totalObservations": { "type": "integer" },
+        "weightedScore": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["aggregateId", "scopeKey", "totalObservations", "weightedScore", "updatedAt"]
+    },
+    "ModelMetadata": {
+      "title": "Learning Model Metadata",
+      "description": "Version tracking, global evaluation metrics, and learning status",
+      "type": "object",
+      "properties": {
+        "modelVersion": { "type": "string" },
+        "status": { "type": "string" },
+        "totalEventsProcessed": { "type": "integer" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["modelVersion", "status", "totalEventsProcessed", "updatedAt"]
+    },
+    "JobSnapshot": {
+      "title": "Job Market Snapshot",
+      "description": "Immutable point-in-time snapshot of an ingested job posting with cryptographic provenance",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "jobId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "roleTitle": { "type": "string" },
+        "sourceUrl": { "type": "string" },
+        "sourceDomain": { "type": "string" },
+        "sourceType": { "type": "string" },
+        "sourceHash": { "type": "string" },
+        "status": { "type": "string" },
+        "snapshotTimestamp": { "type": "string" }
+      },
+      "required": ["id", "jobId", "companyName", "roleTitle", "sourceType", "sourceHash", "status", "snapshotTimestamp"]
+    },
+    "MarketAggregate": {
+      "title": "Market Aggregate Requirements",
+      "description": "Recency-decayed aggregate skill and technology frequencies for a role or company",
+      "type": "object",
+      "properties": {
+        "aggregateId": { "type": "string" },
+        "roleKey": { "type": "string" },
+        "companyKey": { "type": "string" },
+        "window": { "type": "string" },
+        "sampleSize": { "type": "integer" },
+        "lastAggregatedAt": { "type": "string" }
+      },
+      "required": ["aggregateId", "window", "sampleSize", "lastAggregatedAt"]
     }
   },
   "firestore": {
@@ -102,6 +172,10 @@
       "schema": "Analysis",
       "description": "User resume tailoring analyses subcollection"
     },
+    "/users/{userId}/learningEvents/{eventId}": {
+      "schema": "LearningEvent",
+      "description": "Isolated user learning events subcollection"
+    },
     "/companyIntelligence/{companyId}": {
       "schema": "CompanyIntelligence",
       "description": "Universal public company intelligence documents keyed by canonical company ID"
@@ -109,6 +183,22 @@
     "/roleIntelligence/{roleId}": {
       "schema": "RoleIntelligence",
       "description": "Universal public role intelligence documents keyed by canonical role ID"
+    },
+    "/learningAggregates/{aggregateId}": {
+      "schema": "LearningAggregate",
+      "description": "Non-PII system-wide aggregate signals"
+    },
+    "/modelMetadata/{modelId}": {
+      "schema": "ModelMetadata",
+      "description": "Model versioning and evaluation metrics"
+    },
+    "/jobSnapshots/{snapshotId}": {
+      "schema": "JobSnapshot",
+      "description": "Public immutable job posting snapshots with verifiable provenance"
+    },
+    "/marketAggregates/{aggregateId}": {
+      "schema": "MarketAggregate",
+      "description": "Recency-weighted market trend aggregates across roles and companies"
     }
   }
 }

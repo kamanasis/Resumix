@@ -10,7 +10,9 @@ import {
   PriorityTier,
   CompanyIntelligence,
   RoleIntelligence,
-  NormalizedRoleEntity
+  NormalizedRoleEntity,
+  AdaptiveIntelligenceResponse,
+  AdaptiveRecommendation
 } from "../types";
 import { 
   Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, TrendingDown,
@@ -19,7 +21,7 @@ import {
   Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers, Briefcase,
   CheckCircle2, X, ChevronRight, HelpCircle, Target, Award, ShieldCheck,
   Zap, BookOpen, AlertCircle, ArrowUpRight, Search, ListFilter, Activity,
-  Building2
+  Building2, Brain, ThumbsUp, ThumbsDown
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
@@ -369,6 +371,114 @@ export default function TailorWizard({
     return () => clearTimeout(timer);
   }, [targetRole, targetCompany, jobDescription, parsedResume]);
 
+  // Adaptive Learning Intelligence states
+  const [adaptiveIntelligence, setAdaptiveIntelligence] = useState<AdaptiveIntelligenceResponse | null>(null);
+  const [isLoadingAdaptive, setIsLoadingAdaptive] = useState(false);
+  const [adaptiveFeedbackGiven, setAdaptiveFeedbackGiven] = useState<Record<string, "UP" | "DOWN">>({});
+
+  const emitLearningEvent = (eventData: any) => {
+    try {
+      fetch("/api/learning/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          sessionId: `session_${userId}_${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          ...eventData
+        })
+      }).catch((e) => console.warn("Learning event emission non-blocking warning:", e));
+    } catch {}
+  };
+
+  const fetchAdaptiveRecommendations = async (gap: GapReport, prof: RequirementProfile, parsed?: ParsedResume | null) => {
+    setIsLoadingAdaptive(true);
+    try {
+      const res = await fetch("/api/learning/recommendations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          gapReport: gap,
+          frozenProfile: prof,
+          parsedResume: parsed || parsedResume,
+          companyIntel: companyIntelligence,
+          roleIntel: roleIntelligence,
+          userId
+        })
+      });
+      const json = await res.json();
+      if (res.ok && json.success && json.data) {
+        setAdaptiveIntelligence(json.data);
+      }
+    } catch (err) {
+      console.warn("Adaptive recommendations non-blocking warning:", err);
+    } finally {
+      setIsLoadingAdaptive(false);
+    }
+  };
+
+  // Predictive Market Alignment state
+  const [predictiveAlignment, setPredictiveAlignment] = useState<{
+    alignmentScore: number;
+    alignmentRating: string;
+    factorContributions: any;
+    baselineScore: number;
+    confidence: string;
+    sampleSize: number;
+    atsScoreBefore?: number;
+  } | null>(null);
+
+  const fetchPredictiveAlignment = async (
+    role: string, 
+    company?: string, 
+    candidateReqs: string[] = [], 
+    jobReqs: any[] = [], 
+    atsScore?: number
+  ) => {
+    try {
+      const res = await fetch("/api/predictive/alignment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetRole: role,
+          targetCompany: company,
+          candidateRequirements: candidateReqs,
+          jobRequirements: jobReqs,
+          atsScoreBefore: atsScore
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.data) {
+        setPredictiveAlignment(data.data);
+      }
+    } catch (e) {
+      console.warn("Predictive alignment fetch non-blocking error:", e);
+    }
+  };
+
+  const handleAdaptiveFeedback = async (recId: string, rating: 1 | -1, recTitle: string) => {
+    setAdaptiveFeedbackGiven(prev => ({ ...prev, [recId]: rating === 1 ? "UP" : "DOWN" }));
+    try {
+      await fetch("/api/learning/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recommendationId: recId,
+          userId,
+          rating,
+          context: {
+            targetCompany,
+            targetRole,
+            roleFamily: roleEntity?.roleFamily,
+            recommendationTitle: recTitle
+          }
+        })
+      });
+    } catch (err) {
+      console.warn("Adaptive feedback submission non-blocking warning:", err);
+    }
+  };
+
   const [trackedSuccess, setTrackedSuccess] = useState(false);
 
   const handleTrackApplication = async () => {
@@ -436,6 +546,8 @@ export default function TailorWizard({
     setGapErrorDetails(null);
     setMarketIntelligence(null);
     setIntelligenceError(null);
+    setAdaptiveIntelligence(null);
+    setAdaptiveFeedbackGiven({});
     setTrackedSuccess(false);
     setErrorDetails({ title: "", message: "" });
     setPipelineStage(1);
@@ -581,6 +693,27 @@ export default function TailorWizard({
     const candidateSkills = parsed?.skills || [];
     fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
 
+    // Fetch Empirical Adaptive Learning recommendations
+    fetchAdaptiveRecommendations(gapData, profile, parsed);
+
+    // Fetch Real-World Predictive Market Alignment (Deterministic ATS Invariance Guaranteed)
+    const candidateMatchedReqs = (gapData.categorizedGaps?.matchedRequirements || []).map(r => r.name || r.canonicalName);
+    fetchPredictiveAlignment(targetRole, targetCompany, candidateMatchedReqs, profile.structuredRequirements, gapData.atsScore);
+
+    // Emit Learning Event: Gap Analysis Performed
+    emitLearningEvent({
+      type: "ANALYSIS_RUN",
+      targetCompany,
+      targetRole,
+      roleFamily: roleEntity?.roleFamily,
+      initialAtsScore: gapData.atsScore,
+      metadata: {
+        criticalGapsCount: gapData.scoreBreakdown?.criticalGapsCount,
+        requiredMatched: gapData.scoreBreakdown?.requiredMatched,
+        requiredTotal: gapData.scoreBreakdown?.requiredTotal
+      }
+    });
+
     setPipelineStage(6);
     setLoadingMessage("Preparing actionable recommendations and application readiness...");
 
@@ -670,6 +803,20 @@ export default function TailorWizard({
         ...prev,
         [itemKey]: data.data
       }));
+
+      // Emit Learning Event: Single Fix Explanation
+      emitLearningEvent({
+        type: "SINGLE_FIX_REQUEST",
+        targetCompany,
+        targetRole,
+        roleFamily: roleEntity?.roleFamily,
+        requirementTitle: item.title,
+        metadata: {
+          requirementId: item.id,
+          priorityTier: item.priorityTier,
+          importance: item.importance
+        }
+      });
     } catch (err: any) {
       clearTimeout(timeoutId);
       console.error("Single fix explanation error:", err);
@@ -762,6 +909,21 @@ export default function TailorWizard({
 
           await setDoc(doc(db, "users", userId, "analyses", analysisId), analysisDoc);
           onAnalysisCreated();
+
+          // Emit Learning Event: Batch Tailor Applied
+          emitLearningEvent({
+            type: "BATCH_TAILOR_APPLIED",
+            targetCompany,
+            targetRole,
+            roleFamily: roleEntity?.roleFamily,
+            beforeScore,
+            afterScore,
+            scoreDelta: delta,
+            metadata: {
+              selectedItemsCount: selectedItems.length,
+              skillsCount: frozenProfile?.requiredSkills?.length
+            }
+          });
         } catch (saveErr) {
           console.warn("Could not save tailored analysis to Firestore:", saveErr);
         }
@@ -852,6 +1014,19 @@ export default function TailorWizard({
         triggerDownload(htmlBlob, filename);
       }
     }
+
+    // Emit Learning Event: Resume Exported
+    emitLearningEvent({
+      type: "RESUME_EXPORTED",
+      targetCompany,
+      targetRole,
+      roleFamily: roleEntity?.roleFamily,
+      finalAtsScore: (batchResult as any)?.scoreComparison?.afterAtsScore || gapReport?.atsScore,
+      metadata: {
+        exportFormat: format,
+        isTailored: Boolean(batchResult)
+      }
+    });
   };
 
   const handleImportJobUrl = async () => {
@@ -1309,6 +1484,58 @@ export default function TailorWizard({
           </div>
         </div>
 
+        {/* PREDICTIVE MARKET ALIGNMENT & SOURCE PROVENANCE */}
+        {predictiveAlignment && (
+          <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white p-5 rounded-3xl border border-slate-700 shadow-md space-y-3">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                  Estimated Market Alignment: {predictiveAlignment.alignmentScore}%
+                </span>
+                <span className="text-xs text-slate-300 font-semibold">
+                  ({predictiveAlignment.alignmentRating} Match · {predictiveAlignment.confidence} Confidence)
+                </span>
+              </div>
+              <div className="flex items-center gap-1 text-[11px] text-amber-300 bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Deterministic ATS Score ({gapReport.atsScore}%) is Strictly Invariant</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs text-slate-300">
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Job Match (50%)</span>
+                <span className="font-bold text-white text-sm">{Math.round(predictiveAlignment.factorContributions?.directJobMatchScore || 0)}%</span>
+              </div>
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Company Match (20%)</span>
+                <span className="font-bold text-white text-sm">{Math.round(predictiveAlignment.factorContributions?.companyProfileMatchScore || 0)}%</span>
+              </div>
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Role Demand (20%)</span>
+                <span className="font-bold text-white text-sm">{Math.round(predictiveAlignment.factorContributions?.roleMarketDemandScore || 0)}%</span>
+              </div>
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Empirical Prior (10%)</span>
+                <span className="font-bold text-white text-sm">{Math.round(predictiveAlignment.factorContributions?.historicalOutcomeBonus || 0)}%</span>
+              </div>
+            </div>
+
+            {importedJobData?.source && (
+              <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between text-[11px] text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                  Verified Provenance: <strong className="text-white">{importedJobData.source.domain || importedJobData.companyName}</strong>
+                </span>
+                <span className="font-mono text-[10px]">
+                  Lifecycle: <span className="text-emerald-400 font-bold">{importedJobData.status || "ACTIVE"}</span>
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* APPLICATION READINESS BANNER */}
         <div className={`p-5 rounded-3xl border shadow-sm space-y-3 ${
           readinessStatus === "READY_TO_APPLY" 
@@ -1476,7 +1703,12 @@ export default function TailorWizard({
             }`}
           >
             <BarChart3 className="w-4 h-4" />
-            <span>Market Intelligence</span>
+            <span>Market & Adaptive Intel</span>
+            {adaptiveIntelligence && (
+              <span className="px-1.5 py-0.5 bg-cyan-100 text-cyan-800 text-[10px] font-bold rounded-full">
+                {adaptiveIntelligence.recommendations?.length || 0}
+              </span>
+            )}
           </button>
         </div>
 
@@ -2385,6 +2617,186 @@ export default function TailorWizard({
                   <p className="text-[10px] text-slate-400 italic">
                     {roleIntelligence.disclaimer}
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* ADAPTIVE LEARNING INTELLIGENCE & RECOMMENDATIONS */}
+            {isLoadingAdaptive && (
+              <div className="p-8 bg-white border border-slate-200 rounded-3xl text-center space-y-2">
+                <RefreshCw className="w-6 h-6 text-cyan-500 animate-spin mx-auto" />
+                <h4 className="font-bold text-slate-800 text-xs">Computing Empirical Adaptive Recommendations...</h4>
+                <p className="text-[11px] text-slate-500">
+                  Calibrating Bayesian weights, role co-occurrence, and interaction recency.
+                </p>
+              </div>
+            )}
+
+            {!isLoadingAdaptive && adaptiveIntelligence && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-5">
+                {/* Header & Status */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-2.5 py-0.5 bg-cyan-50 text-cyan-700 border border-cyan-200/60 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                        <Brain className="w-3 h-3 text-cyan-600" />
+                        Adaptive Intelligence Layer
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        adaptiveIntelligence.confidence === "HIGH" ? "bg-emerald-100 text-emerald-800 border border-emerald-300" :
+                        adaptiveIntelligence.confidence === "MEDIUM" ? "bg-cyan-100 text-cyan-800 border border-cyan-300" :
+                        "bg-slate-100 text-slate-700 border border-slate-300"
+                      }`}>
+                        {adaptiveIntelligence.confidence} Confidence
+                      </span>
+                      <span className="px-2 py-0.5 bg-slate-100 text-slate-600 border border-slate-200 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                        {adaptiveIntelligence.learningStatus === "COLD_START" ? "Cold Start" : adaptiveIntelligence.learningStatus === "LEARNING" ? "Active Learning" : "Mature"}
+                      </span>
+                    </div>
+                    <h4 className="text-lg font-display font-bold text-slate-900 flex items-center gap-2">
+                      <span>Empirical Pattern Recommendations</span>
+                      <span className="text-xs font-mono font-normal text-slate-400">({adaptiveIntelligence.modelVersion})</span>
+                    </h4>
+                  </div>
+
+                  <div className="text-right text-xs text-slate-500">
+                    <span className="font-semibold text-slate-700 block">
+                      {adaptiveIntelligence.recommendations.length} Actionable Recommendations
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Zero data fabrication • Deterministic score invariant
+                    </span>
+                  </div>
+                </div>
+
+                {/* High Value Keywords if present */}
+                {adaptiveIntelligence.highValueKeywords && adaptiveIntelligence.highValueKeywords.length > 0 && (
+                  <div className="p-4 bg-cyan-50/50 border border-cyan-200/60 rounded-2xl space-y-2">
+                    <span className="text-[11px] font-bold text-cyan-900 uppercase tracking-wider block flex items-center gap-1.5">
+                      <Target className="w-3.5 h-3.5 text-cyan-600" />
+                      Learned High-Value Market Keywords for this Role & Company
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {adaptiveIntelligence.highValueKeywords.map((kw, idx) => (
+                        <span 
+                          key={idx} 
+                          className="px-2.5 py-1 bg-white border border-cyan-200 text-cyan-950 rounded-lg text-xs font-semibold shadow-2xs flex items-center gap-1.5"
+                        >
+                          <span>{kw.keyword}</span>
+                          <span className="text-[10px] font-bold text-cyan-600">
+                            {kw.relevanceScore}%
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Recommendations List */}
+                <div className="space-y-3">
+                  {adaptiveIntelligence.recommendations.map((rec) => {
+                    const feedback = adaptiveFeedbackGiven[rec.id];
+                    return (
+                      <div 
+                        key={rec.id}
+                        className="p-4 rounded-2xl border border-slate-200 bg-white hover:border-cyan-300 transition-all shadow-2xs space-y-3"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
+                              rec.learnedPriority === "CRITICAL" ? "bg-rose-100 text-rose-800 border border-rose-200" :
+                              rec.learnedPriority === "HIGH" ? "bg-amber-100 text-amber-800 border border-amber-200" :
+                              rec.learnedPriority === "MEDIUM" ? "bg-cyan-100 text-cyan-800 border border-cyan-200" :
+                              "bg-slate-100 text-slate-700 border border-slate-200"
+                            }`}>
+                              {rec.learnedPriority} Priority
+                            </span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md text-[10px] font-semibold uppercase">
+                              {rec.type.replace(/_/g, " ")}
+                            </span>
+                            <span className="text-[10px] font-semibold text-slate-400">
+                              Confidence: {Math.round(rec.confidenceScore * 100)}%
+                            </span>
+                          </div>
+
+                          {/* Interactive Feedback Buttons */}
+                          <div className="flex items-center gap-2 self-end sm:self-auto">
+                            {feedback ? (
+                              <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
+                                <Check className="w-3.5 h-3.5" /> Feedback recorded
+                              </span>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-slate-400 mr-1">Helpful?</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAdaptiveFeedback(rec.id, 1, rec.targetItem)}
+                                  className="p-1 hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 rounded-lg transition-colors clickable-cursor"
+                                  title="Helpful recommendation"
+                                >
+                                  <ThumbsUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAdaptiveFeedback(rec.id, -1, rec.targetItem)}
+                                  className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-colors clickable-cursor"
+                                  title="Not helpful"
+                                >
+                                  <ThumbsDown className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <h5 className="text-sm font-bold text-slate-900">{rec.targetItem}</h5>
+                          <p className="text-xs text-slate-600 mt-1 leading-relaxed">{rec.reason}</p>
+                        </div>
+
+                        {/* Factor Weights Breakdown Bar */}
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2 border-t border-slate-100 text-[10px] text-slate-500">
+                          <div className="p-1.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-400 block">Evidence Match</span>
+                            <span className="font-semibold text-slate-700">{Math.round(rec.evidenceScore * 100)}%</span>
+                          </div>
+                          <div className="p-1.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-400 block">Role Market Freq</span>
+                            <span className="font-semibold text-slate-700">{Math.round(rec.roleWeight * 100)}%</span>
+                          </div>
+                          <div className="p-1.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-400 block">Company Pattern</span>
+                            <span className="font-semibold text-slate-700">{Math.round(rec.companyWeight * 100)}%</span>
+                          </div>
+                          <div className="p-1.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-400 block">Action Rate</span>
+                            <span className="font-semibold text-slate-700">{Math.round(rec.behaviorScore * 100)}%</span>
+                          </div>
+                          <div className="p-1.5 bg-slate-50 rounded-lg">
+                            <span className="text-slate-400 block">Recency Weight</span>
+                            <span className="font-semibold text-slate-700">{Math.round(rec.recencyScore * 100)}%</span>
+                          </div>
+                        </div>
+
+                        {/* Suggested Action */}
+                        <div className="p-2.5 bg-cyan-50/60 rounded-xl border border-cyan-100 flex items-start gap-2 text-[11px]">
+                          <Zap className="w-3.5 h-3.5 text-cyan-600 shrink-0 mt-0.5" />
+                          <div>
+                            <strong className="text-cyan-900 font-semibold">Evidence Guidance: </strong>
+                            <span className="text-cyan-800">{rec.evidence}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Transparency Disclosure */}
+                <div className="pt-3 border-t border-slate-100 flex items-center gap-2 text-[10px] text-slate-400">
+                  <ShieldCheck className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span>
+                    Empirical Bayesian calibration. Recommendation weights adapt over time without modifying deterministic ATS scoring or creating unverified claims.
+                  </span>
                 </div>
               </div>
             )}

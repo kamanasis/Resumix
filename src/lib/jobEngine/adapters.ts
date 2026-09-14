@@ -1,4 +1,6 @@
 import { 
+  Job,
+  JobSnapshot,
   JobProvider, 
   JobSourceType, 
   JobConfidence, 
@@ -10,6 +12,8 @@ import {
 import { resolveCompany } from "./companyResolver";
 import { verifyJobContent } from "./jobVerifier";
 import { normalizeJobRole, extractJobRequirements } from "./jobNormalizer";
+import { validateExternalJobUrl, safeFetchExternalJobUrl } from "./ssrfProtector";
+import { calculateSourceHash, extractDomainFromUrl } from "./sourceProvenance";
 import crypto from "crypto";
 
 // ============================================================================
@@ -53,11 +57,31 @@ export class GreenhouseAdapter implements JobSourceAdapter {
   sourceType: JobSourceType = "ATS_API";
 
   canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "GREENHOUSE") return true;
     if (!input.url) return false;
     return /boards\.greenhouse\.io|boards-api\.greenhouse\.io/i.test(input.url);
   }
 
   async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
+    if (input.rawText) {
+      const company = input.company || "Greenhouse Employer";
+      const title = input.role || "Software Engineer";
+      const verification = verifyJobContent(title, input.rawText);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Verification failed." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description: input.rawText,
+        companyName: company,
+        sourceUrl: input.url || null,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "PUBLIC_ATS",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
     const url = input.url!;
     try {
       // e.g. https://boards.greenhouse.io/{board_token}/jobs/{id}
@@ -142,11 +166,31 @@ export class LeverAdapter implements JobSourceAdapter {
   sourceType: JobSourceType = "ATS_API";
 
   canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "LEVER") return true;
     if (!input.url) return false;
     return /jobs\.lever\.co|api\.lever\.co/i.test(input.url);
   }
 
   async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
+    if (input.rawText) {
+      const company = input.company || "Lever Employer";
+      const title = input.role || "Software Engineer";
+      const verification = verifyJobContent(title, input.rawText);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Content failed verification." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description: input.rawText,
+        companyName: company,
+        sourceUrl: input.url || null,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "PUBLIC_ATS",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
     const url = input.url!;
     try {
       // e.g. https://jobs.lever.co/{company}/{postingId}
@@ -223,11 +267,31 @@ export class AshbyAdapter implements JobSourceAdapter {
   sourceType: JobSourceType = "ATS_API";
 
   canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "ASHBY") return true;
     if (!input.url) return false;
     return /jobs\.ashbyhq\.com|api\.ashbyhq\.com/i.test(input.url);
   }
 
   async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
+    if (input.rawText) {
+      const company = input.company || "Ashby Employer";
+      const title = input.role || "Software Engineer";
+      const verification = verifyJobContent(title, input.rawText);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Content failed verification." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description: input.rawText,
+        companyName: company,
+        sourceUrl: input.url || null,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "PUBLIC_ATS",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
     const url = input.url!;
     try {
       const match = url.match(/ashbyhq\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)/i);
@@ -290,11 +354,31 @@ export class WorkableAdapter implements JobSourceAdapter {
   sourceType: JobSourceType = "ATS_API";
 
   canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "WORKABLE") return true;
     if (!input.url) return false;
     return /apply\.workable\.com|workable\.com/i.test(input.url);
   }
 
   async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
+    if (input.rawText) {
+      const company = input.company || "Workable Employer";
+      const title = input.role || "Software Engineer";
+      const verification = verifyJobContent(title, input.rawText);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Content failed verification." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description: input.rawText,
+        companyName: company,
+        sourceUrl: input.url || null,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "PUBLIC_ATS",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
     const url = input.url!;
     try {
       const resp = await fetch(url, {
@@ -338,11 +422,31 @@ export class SmartRecruitersAdapter implements JobSourceAdapter {
   sourceType: JobSourceType = "ATS_API";
 
   canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "SMARTRECRUITERS") return true;
     if (!input.url) return false;
     return /smartrecruiters\.com/i.test(input.url);
   }
 
   async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
+    if (input.rawText) {
+      const company = input.company || "SmartRecruiters Employer";
+      const title = input.role || "Software Engineer";
+      const verification = verifyJobContent(title, input.rawText);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Content failed verification." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description: input.rawText,
+        companyName: company,
+        sourceUrl: input.url || null,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "PUBLIC_ATS",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
     const url = input.url!;
     try {
       const resp = await fetch(url, {
@@ -386,20 +490,23 @@ export class JSONLDAdapter implements JobSourceAdapter {
   sourceType: JobSourceType = "WEB_JSON_LD";
 
   canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "JSON_LD") return true;
     return Boolean(input.url);
   }
 
   async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
-    const url = input.url!;
     try {
-      const resp = await fetch(url, {
-        headers: { "User-Agent": "Resumix-JobIngest/1.0", "Accept": "text/html" },
-        signal: AbortSignal.timeout(8000)
-      });
-      if (!resp.ok) {
-        return { success: false, error: { code: "JOB_SOURCE_UNREACHABLE", message: `HTTP ${resp.status}` } };
+      let html = input.rawHtml || "";
+      if (!html && input.url) {
+        const resp = await fetch(input.url, {
+          headers: { "User-Agent": "Resumix-JobIngest/1.0", "Accept": "text/html" },
+          signal: AbortSignal.timeout(8000)
+        });
+        if (!resp.ok) {
+          return { success: false, error: { code: "JOB_SOURCE_UNREACHABLE", message: `HTTP ${resp.status}` } };
+        }
+        html = await resp.text();
       }
-      const html = await resp.text();
 
       // Look for schema.org/JobPosting in <script type="application/ld+json">
       const regex = /<script\s+type=["']application\/ld\+json["']>([\s\S]*?)<\/script>/gi;
@@ -437,7 +544,7 @@ export class JSONLDAdapter implements JobSourceAdapter {
         title,
         description,
         companyName: company,
-        sourceUrl: url,
+        sourceUrl: input.url || null,
         provider: this.provider,
         sourceType: this.sourceType,
         confidence: "PUBLIC_PAGE",
@@ -461,20 +568,23 @@ export class SemanticHTMLAdapter implements JobSourceAdapter {
   sourceType: JobSourceType = "SEMANTIC_HTML";
 
   canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "SEMANTIC_HTML") return true;
     return Boolean(input.url);
   }
 
   async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
-    const url = input.url!;
     try {
-      const resp = await fetch(url, {
-        headers: { "User-Agent": "Resumix-JobIngest/1.0", "Accept": "text/html" },
-        signal: AbortSignal.timeout(8000)
-      });
-      if (!resp.ok) {
-        return { success: false, error: { code: "JOB_SOURCE_UNREACHABLE", message: `HTTP ${resp.status}` } };
+      let html = input.rawHtml || "";
+      if (!html && input.url) {
+        const resp = await fetch(input.url, {
+          headers: { "User-Agent": "Resumix-JobIngest/1.0", "Accept": "text/html" },
+          signal: AbortSignal.timeout(8000)
+        });
+        if (!resp.ok) {
+          return { success: false, error: { code: "JOB_SOURCE_UNREACHABLE", message: `HTTP ${resp.status}` } };
+        }
+        html = await resp.text();
       }
-      const html = await resp.text();
 
       // Extract from main, article, or full text
       const mainMatch = html.match(/<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/i);
@@ -492,7 +602,7 @@ export class SemanticHTMLAdapter implements JobSourceAdapter {
         title,
         description,
         companyName: company,
-        sourceUrl: url,
+        sourceUrl: input.url || null,
         provider: this.provider,
         sourceType: this.sourceType,
         confidence: "PUBLIC_PAGE",
@@ -509,7 +619,7 @@ export class SemanticHTMLAdapter implements JobSourceAdapter {
 // ----------------------------------------------------------------------------
 export class UserPastedAdapter implements JobSourceAdapter {
   provider: JobProvider = "USER_PASTED";
-  sourceType: JobSourceType = "USER_INPUT";
+  sourceType: JobSourceType = "USER_PASTE";
 
   canHandle(input: JobSourceInput): boolean {
     return Boolean(input.rawText && input.rawText.trim().length > 0);
@@ -540,6 +650,10 @@ export class UserPastedAdapter implements JobSourceAdapter {
     });
   }
 }
+
+export const JsonLdAdapter = JSONLDAdapter;
+export const SemanticHtmlAdapter = SemanticHTMLAdapter;
+export const UserPasteAdapter = UserPastedAdapter;
 
 // ----------------------------------------------------------------------------
 // Shared Builder: Constructs Normalized Job, Company, and Snapshot
@@ -579,9 +693,12 @@ export function buildJobEntity(params: {
     provider: params.provider,
     sourceType: params.sourceType,
     sourceUrl: params.sourceUrl,
-    sourceDomain: params.sourceUrl ? new URL(params.sourceUrl).hostname : undefined,
+    sourceDomain: params.sourceUrl ? extractDomainFromUrl(params.sourceUrl) : "user-input",
     retrievedAt: now,
-    sourceConfidence: params.confidence
+    sourceConfidence: params.confidence,
+    sourceLastVerifiedAt: now,
+    sourceHash: contentHash,
+    sourceStatus: "ACTIVE"
   };
 
   const job = {
@@ -596,7 +713,7 @@ export function buildJobEntity(params: {
     employmentType: params.employmentType,
     source: sourceRef,
     currentSnapshotId: snapshotId,
-    status: "ACTIVE" as const,
+    status: params.sourceType === "USER_PASTE" || params.provider === "USER_PASTED" ? ("USER_SUPPLIED" as const) : ("ACTIVE" as const),
     firstSeenAt: now,
     lastSeenAt: now,
     createdAt: now,
@@ -612,7 +729,7 @@ export function buildJobEntity(params: {
     skills: requirements.map(r => r.canonicalName)
   };
 
-  const snapshot = {
+  const snapshot: JobSnapshot = {
     snapshotId,
     jobId,
     retrievedAt: now,
@@ -625,6 +742,8 @@ export function buildJobEntity(params: {
     requirements,
     extractionStatus: "VERIFIED" as const,
     evidenceQuality: params.evidenceQuality,
+    status: params.sourceType === "USER_PASTE" || params.provider === "USER_PASTED" ? ("USER_SUPPLIED" as const) : ("ACTIVE" as const),
+    sourceLastVerifiedAt: now,
     createdAt: now
   };
 
@@ -635,3 +754,144 @@ export function buildJobEntity(params: {
     company
   };
 }
+
+export const buildStandardJobResult = buildJobEntity;
+
+// ----------------------------------------------------------------------------
+// 9. Adzuna Adapter (Public Aggregator API / URLs)
+// ----------------------------------------------------------------------------
+export class AdzunaAdapter implements JobSourceAdapter {
+  provider: JobProvider = "ADZUNA";
+  sourceType: JobSourceType = "AGGREGATOR";
+
+  canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "ADZUNA") return true;
+    if (!input.url) return false;
+    return /adzuna\.(com|co\.uk|ca|com\.au)/i.test(input.url);
+  }
+
+  async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
+    if (input.url) {
+      const ssrf = validateExternalJobUrl(input.url);
+      if (!ssrf.isSafe) {
+        return { success: false, error: { code: "SSRF_PROHIBITED", message: ssrf.reason || "Prohibited target URL." } };
+      }
+    }
+
+    // When raw text is provided directly via Adzuna feed
+    if (input.rawText) {
+      const company = input.company || "Adzuna Employer";
+      const title = input.role || "Job Posting";
+      const verification = verifyJobContent(title, input.rawText);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Job verification failed." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description: input.rawText,
+        companyName: company,
+        sourceUrl: input.url || null,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "PUBLIC_PAGE",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
+    // Fetch public web posting via safe wrapper
+    if (input.url) {
+      const res = await safeFetchExternalJobUrl(input.url);
+      if (!res.ok) {
+        return { success: false, error: { code: "JOB_SOURCE_UNREACHABLE", message: res.error || "Failed to fetch Adzuna posting." } };
+      }
+      const title = input.role || "Job Opportunity";
+      const company = input.company || "Company";
+      const description = stripHtml(res.text);
+      const verification = verifyJobContent(title, description, res.text);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Job verification failed." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description,
+        companyName: company,
+        sourceUrl: input.url,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "PUBLIC_PAGE",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
+    return { success: false, error: { code: "INVALID_INPUT", message: "Adzuna adapter requires URL or rawText." } };
+  }
+}
+
+// ----------------------------------------------------------------------------
+// 10. USAJobs Adapter (Official US Government Public Job API / URLs)
+// ----------------------------------------------------------------------------
+export class USAJobsAdapter implements JobSourceAdapter {
+  provider: JobProvider = "USAJOBS";
+  sourceType: JobSourceType = "ATS_API";
+
+  canHandle(input: JobSourceInput): boolean {
+    if (input.provider === "USAJOBS") return true;
+    if (!input.url) return false;
+    return /usajobs\.gov/i.test(input.url);
+  }
+
+  async fetchJob(input: JobSourceInput): Promise<JobFetchResult> {
+    if (input.url) {
+      const ssrf = validateExternalJobUrl(input.url);
+      if (!ssrf.isSafe) {
+        return { success: false, error: { code: "SSRF_PROHIBITED", message: ssrf.reason || "Prohibited target URL." } };
+      }
+    }
+
+    if (input.rawText) {
+      const company = input.company || "US Federal Agency";
+      const title = input.role || "Public Service Role";
+      const verification = verifyJobContent(title, input.rawText);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Job verification failed." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description: input.rawText,
+        companyName: company,
+        sourceUrl: input.url || null,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "VERIFIED_ATS",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
+    if (input.url) {
+      const res = await safeFetchExternalJobUrl(input.url);
+      if (!res.ok) {
+        return { success: false, error: { code: "JOB_SOURCE_UNREACHABLE", message: res.error || "Failed to fetch USAJobs posting." } };
+      }
+      const title = input.role || "Federal Role";
+      const company = input.company || "Federal Agency";
+      const description = stripHtml(res.text);
+      const verification = verifyJobContent(title, description, res.text);
+      if (!verification.isValid) {
+        return { success: false, error: { code: verification.errorCode || "JOB_EXTRACTION_FAILED", message: verification.reason || "Job verification failed." } };
+      }
+      return buildStandardJobResult({
+        title,
+        description,
+        companyName: company,
+        sourceUrl: input.url,
+        provider: this.provider,
+        sourceType: this.sourceType,
+        confidence: "VERIFIED_ATS",
+        evidenceQuality: verification.evidenceQuality
+      });
+    }
+
+    return { success: false, error: { code: "INVALID_INPUT", message: "USAJobs adapter requires URL or rawText." } };
+  }
+}
+

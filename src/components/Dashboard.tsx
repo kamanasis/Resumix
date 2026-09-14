@@ -23,7 +23,8 @@ import {
   Copy,
   Check,
   ExternalLink,
-  GraduationCap
+  GraduationCap,
+  Brain
 } from "lucide-react";
 import ResumeUpload from "./ResumeUpload";
 import ResumeList from "./ResumeList";
@@ -68,6 +69,43 @@ export default function Dashboard({ user }: DashboardProps) {
     jobDescription?: string;
     resumeId?: string;
   } | null>(null);
+
+  const [learningMetadata, setLearningMetadata] = useState<{
+    status: string;
+    totalObservations: number;
+    userObservations: number;
+    topRoleFamily: string | null;
+    modelVersion: string;
+  } | null>(null);
+
+  // Sync Adaptive Learning system metadata and user profile
+  useEffect(() => {
+    let isMounted = true;
+    const loadLearningSummary = async () => {
+      try {
+        const [metaRes, profRes] = await Promise.all([
+          fetch("/api/learning/model-metadata").then(r => r.ok ? r.json() : null),
+          fetch(`/api/learning/profile/${user.uid}`).then(r => r.ok ? r.json() : null)
+        ]);
+
+        if (isMounted) {
+          const meta = metaRes?.data;
+          const prof = profRes?.data;
+          setLearningMetadata({
+            status: meta?.modelStatus || "COLD_START",
+            totalObservations: meta?.totalObservations || 0,
+            userObservations: prof?.totalInteractions || 0,
+            topRoleFamily: prof?.preferredRoleFamilies?.[0] || null,
+            modelVersion: meta?.modelVersion || "v1.0.0-bayesian"
+          });
+        }
+      } catch (err) {
+        console.warn("Learning metadata fetch non-blocking warning:", err);
+      }
+    };
+    loadLearningSummary();
+    return () => { isMounted = false; };
+  }, [user.uid, analyses.length, gapReports.length]);
 
   // Sync uploaded resumes from Firestore
   useEffect(() => {
@@ -567,6 +605,47 @@ service cloud.firestore {
               </div>
             </div>
           </div>
+
+          {/* Adaptive Learning Intelligence Status Strip */}
+          {learningMetadata && (
+            <div className="bg-gradient-to-r from-cyan-900/90 via-slate-900/95 to-slate-900 border border-cyan-500/20 rounded-2xl px-5 py-3.5 text-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-400/30 flex items-center justify-center text-cyan-400 shrink-0">
+                  <Brain className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-display font-semibold text-xs text-white">Empirical Adaptive Learning Engine</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                      learningMetadata.status === "MATURE" 
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" 
+                        : learningMetadata.status === "LEARNING" 
+                        ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" 
+                        : "bg-slate-700/60 text-slate-300 border border-slate-600/40"
+                    }`}>
+                      {learningMetadata.status === "COLD_START" ? "Cold Start Baseline" : learningMetadata.status === "LEARNING" ? "Active Learning" : "Mature Pattern System"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Empirical Bayesian calibration across {learningMetadata.totalObservations} market observations • Non-fabrication guaranteed
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 text-xs shrink-0 self-start md:self-auto">
+                {learningMetadata.topRoleFamily && (
+                  <div className="text-right">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Top Focus</span>
+                    <span className="text-xs font-semibold text-cyan-300">{learningMetadata.topRoleFamily}</span>
+                  </div>
+                )}
+                <div className="text-right pl-3 border-l border-slate-800">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Your Activity</span>
+                  <span className="text-xs font-semibold text-white">{learningMetadata.userObservations} events</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Dynamic Tab Views - Glassmorphic Content Container */}
           <div className="bg-white/70 backdrop-blur-xl border border-white rounded-3xl p-6 lg:p-8 shadow-sm flex-1 flex flex-col min-h-[460px]">

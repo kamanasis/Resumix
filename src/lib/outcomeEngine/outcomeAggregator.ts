@@ -70,15 +70,18 @@ export function aggregateOutcomeAnalytics(params: {
   for (const record of eligibleRecords) {
     switch (record.outcome) {
       case "RECRUITER_SCREEN":
+      case "ASSESSMENT_RECEIVED":
         recruiterScreenCount += 1;
         break;
       case "INTERVIEW":
       case "TECHNICAL_INTERVIEW":
       case "FINAL_ROUND":
+      case "INTERVIEW_RECEIVED":
         interviewCount += 1;
         recruiterScreenCount += 1; // Prior milestone in hiring progression
         break;
       case "OFFER":
+      case "OFFER_RECEIVED":
         offerCount += 1;
         interviewCount += 1;
         recruiterScreenCount += 1;
@@ -90,9 +93,13 @@ export function aggregateOutcomeAnalytics(params: {
         recruiterScreenCount += 1;
         break;
       case "REJECTED":
+      case "REJECTION_RECEIVED":
         rejectedCount += 1;
         break;
       case "UNKNOWN":
+      case "UNKNOWN_OUTCOME":
+      case "APPLICATION_SUBMITTED":
+      default:
         unknownCount += 1;
         break;
     }
@@ -119,6 +126,7 @@ export function aggregateOutcomeAnalytics(params: {
     eligibleCount: sampleSize,
     evidenceLevel,
     applicationCount: totalRecordsCount,
+    totalSubmissionsCount: totalRecordsCount,
     recruiterScreenCount,
     recruiterScreenRate,
     interviewCount,

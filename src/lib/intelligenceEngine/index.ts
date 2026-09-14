@@ -6,3 +6,4 @@ export * from "./companyIntelligenceEngine";
 export * from "./companyIntelligenceStore";
 export * from "./roleIntelligenceStore";
 export * from "./intelligenceEngine";
+export * from "./marketAggregationEngine";
