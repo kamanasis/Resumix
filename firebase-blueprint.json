@@ -69,6 +69,24 @@
         "lastUpdatedAt": { "type": "string" }
       },
       "required": ["id", "companyId", "normalizedName", "confidence", "status"]
+    },
+    "RoleIntelligence": {
+      "title": "Role Intelligence Profile",
+      "description": "Public role normalization, observed market skills, technologies, and career requirements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "roleId": { "type": "string" },
+        "originalRole": { "type": "string" },
+        "normalizedRole": { "type": "string" },
+        "roleFamily": { "type": "string" },
+        "specialization": { "type": "string" },
+        "seniority": { "type": "string" },
+        "confidence": { "type": "string" },
+        "status": { "type": "string" },
+        "lastUpdatedAt": { "type": "string" }
+      },
+      "required": ["id", "roleId", "normalizedRole", "roleFamily", "seniority", "confidence", "status"]
     }
   },
   "firestore": {
@@ -87,6 +105,10 @@
     "/companyIntelligence/{companyId}": {
       "schema": "CompanyIntelligence",
       "description": "Universal public company intelligence documents keyed by canonical company ID"
+    },
+    "/roleIntelligence/{roleId}": {
+      "schema": "RoleIntelligence",
+      "description": "Universal public role intelligence documents keyed by canonical role ID"
     }
   }
 }

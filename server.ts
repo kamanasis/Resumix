@@ -33,7 +33,8 @@ import {
 import { globalJobIngestionEngine } from "./src/lib/jobEngine";
 import { 
   globalIntelligenceEngine, 
-  globalCompanyIntelligenceStore 
+  globalCompanyIntelligenceStore,
+  globalRoleIntelligenceStore 
 } from "./src/lib/intelligenceEngine";
 import { 
   globalApplicationStore, 
@@ -1976,6 +1977,58 @@ app.post("/api/company/refresh", async (req, res) => {
     return sendSuccess(res, intelligence);
   } catch (error: any) {
     return sendError(res, "COMPANY_REFRESH_FAILED", "Failed to refresh company intelligence.", 500, error.message);
+  }
+});
+
+// Universal Role Intelligence API Routes
+app.post("/api/role/resolve", async (req, res) => {
+  try {
+    const { roleTitle } = req.body;
+    if (!roleTitle || typeof roleTitle !== "string" || !roleTitle.trim()) {
+      return sendError(res, "INVALID_ROLE_TITLE", "roleTitle is required.", 400);
+    }
+    const resolved = globalRoleIntelligenceStore.resolve(roleTitle.trim());
+    return sendSuccess(res, resolved);
+  } catch (error: any) {
+    return sendError(res, "ROLE_RESOLUTION_FAILED", "Failed to resolve role title.", 500, error.message);
+  }
+});
+
+app.post("/api/role/intelligence", async (req, res) => {
+  try {
+    const { roleTitle, companyName, jobDescription, candidateSkills, refresh } = req.body;
+    if (!roleTitle || typeof roleTitle !== "string" || !roleTitle.trim()) {
+      return sendError(res, "INVALID_ROLE_TITLE", "roleTitle is required.", 400);
+    }
+    const intelligence = await globalRoleIntelligenceStore.getIntelligence({
+      roleTitle: roleTitle.trim(),
+      companyName,
+      jobDescription,
+      candidateSkills: Array.isArray(candidateSkills) ? candidateSkills : undefined,
+      refresh: Boolean(refresh)
+    });
+    return sendSuccess(res, intelligence);
+  } catch (error: any) {
+    return sendError(res, "ROLE_INTELLIGENCE_FAILED", "Failed to retrieve role intelligence.", 500, error.message);
+  }
+});
+
+app.post("/api/role/refresh", async (req, res) => {
+  try {
+    const { roleTitle, companyName, jobDescription, candidateSkills } = req.body;
+    if (!roleTitle || typeof roleTitle !== "string" || !roleTitle.trim()) {
+      return sendError(res, "INVALID_ROLE_TITLE", "roleTitle is required.", 400);
+    }
+    const intelligence = await globalRoleIntelligenceStore.getIntelligence({
+      roleTitle: roleTitle.trim(),
+      companyName,
+      jobDescription,
+      candidateSkills: Array.isArray(candidateSkills) ? candidateSkills : undefined,
+      refresh: true
+    });
+    return sendSuccess(res, intelligence);
+  } catch (error: any) {
+    return sendError(res, "ROLE_REFRESH_FAILED", "Failed to refresh role intelligence.", 500, error.message);
   }
 });
 

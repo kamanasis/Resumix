@@ -4,4 +4,5 @@ export * from "./trendEngine";
 export * from "./roleIntelligenceEngine";
 export * from "./companyIntelligenceEngine";
 export * from "./companyIntelligenceStore";
+export * from "./roleIntelligenceStore";
 export * from "./intelligenceEngine";

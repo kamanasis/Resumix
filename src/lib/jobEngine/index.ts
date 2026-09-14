@@ -6,3 +6,5 @@ export * from "./jobDeduplicator";
 export * from "./jobSnapshotManager";
 export * from "./jobIngestionEngine";
 export * from "./publicCompanyService";
+export * from "./roleResolver";
+export * from "./publicRoleService";

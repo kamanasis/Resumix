@@ -803,6 +803,110 @@ export interface RoleIntelligenceProfile {
   generatedAt: string;
 }
 
+export type RoleSourceType =
+  | "PUBLIC_JOB_POSTING"
+  | "JOB_BOARD_API"
+  | "USER_JOB_DESCRIPTION"
+  | "COMPANY_INTELLIGENCE"
+  | "FIRESTORE_CACHE";
+
+export interface RoleSourceProvenance {
+  field: string;
+  value: any;
+  sourceType: RoleSourceType;
+  sourceUrl: string | null;
+  observedAt: string;
+  confidence: number;
+}
+
+export type RoleSeniority =
+  | "Intern"
+  | "Junior"
+  | "Mid-Level"
+  | "Senior"
+  | "Lead"
+  | "Staff"
+  | "Principal"
+  | "Executive";
+
+export type RoleConfidenceTier = "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT_DATA";
+
+export type RoleIntelligenceStatus = "VERIFIED" | "PARTIAL" | "UNVERIFIED" | "LIMITED_DATA";
+
+export interface NormalizedRoleEntity {
+  roleId: string;
+  originalRole: string;
+  normalizedRole: string;
+  roleFamily: string;
+  specialization: string | null;
+  seniority: RoleSeniority;
+  confidence: number;
+  aliases: string[];
+  status: "CONFIDENT" | "AMBIGUOUS" | "UNVERIFIED";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmergingRoleSkill {
+  technology: string;
+  previousFrequency: number;
+  recentFrequency: number;
+  growthPercentage: number;
+  trend: "TRENDING_UP" | "TRENDING_DOWN" | "STABLE";
+  sampleSize: number;
+}
+
+export interface RoleMarketGapItem {
+  skill: string;
+  category: RequirementCategory;
+  marketFrequency: number;
+  marketClassification: "COMMON" | "EMERGING" | "OCCASIONAL";
+  candidateEvidenceStatus: "VERIFIED" | "NO_EVIDENCE";
+  recommendation: string;
+}
+
+export interface RoleIntelligence {
+  id: string;
+  roleId: string;
+  originalRole: string;
+  normalizedRole: string;
+  roleFamily: string;
+  specialization: string | null;
+  seniority: RoleSeniority;
+  aliases: string[];
+  industries: string[];
+  commonSkills: string[];
+  requiredSkillPatterns: RequirementFrequency[];
+  preferredSkillPatterns: RequirementFrequency[];
+  commonTechnologies: string[];
+  commonTools: string[];
+  commonFrameworks: string[];
+  commonLanguages: string[];
+  commonDatabases: string[];
+  commonCloudTechnologies: string[];
+  commonCertifications: string[];
+  commonEducationPatterns: string[];
+  experiencePatterns: ExperiencePattern[];
+  responsibilityPatterns: string[];
+  keywordPatterns: string[];
+  locationPatterns: LocationPattern[];
+  employmentPatterns: string[];
+  relatedRoles: string[];
+  emergingSkills: EmergingRoleSkill[];
+  marketGaps?: RoleMarketGapItem[];
+  sourceRecords: RoleSourceProvenance[];
+  observationCount: number;
+  companyCount: number;
+  confidence: RoleConfidenceTier;
+  confidenceReasons: string[];
+  confidenceScore: number;
+  disclaimer: string;
+  firstObservedAt: string;
+  lastUpdatedAt: string;
+  status: RoleIntelligenceStatus;
+  profile?: RoleIntelligenceProfile;
+}
+
 export interface IntelligenceDatasetVersion {
   versionId: string;
   generatedAt: string;
