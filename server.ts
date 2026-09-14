@@ -25,11 +25,19 @@ import {
 } from "./src/lib/tailoringEngine";
 import {
   generatePrintableHtml,
-  sanitizeExportFileName
+  sanitizeExportFileName,
+  generateDocxBuffer,
+  DOCX_MIME_TYPE
 } from "./src/lib/exportEngine";
 import {
   validateExportReadiness
 } from "./src/lib/exportValidator";
+import {
+  validateExtraction
+} from "./src/lib/extractionValidator";
+import {
+  validateDocxPackage
+} from "./src/lib/docxValidator";
 import { 
   globalJobIngestionEngine,
   globalJobSnapshotStore,
@@ -1122,6 +1130,18 @@ app.post("/api/parse-resume", async (req, res) => {
       return sendError(res, "INVALID_RESUME_TEXT", "Resume text is missing or too short for parsing.", 400);
     }
 
+    // Hard Extraction & Content Quality Gate
+    const extractionCheck = validateExtraction(resumeText);
+    if (extractionCheck.status === "EXTRACTION_FAILED") {
+      return sendError(
+        res,
+        "EXTRACTION_VALIDATION_FAILED",
+        extractionCheck.userMessage || "Resume document extraction failed or contains unreadable binary/corrupted data.",
+        422,
+        extractionCheck.quality
+      );
+    }
+
     const ai = getAI();
     const systemPrompt = `You are a strict, objective Resume Entity Parser.
 Convert the raw resume text into a structured JSON representation adhering to FACT PRESERVATION.
@@ -1588,6 +1608,33 @@ app.post("/api/tailor-resume-batch", async (req, res) => {
       return sendError(res, "INVALID_SELECTED_ITEMS", "selectedItems must be a non-empty array.", 400);
     }
 
+    // Hard Extraction Gate
+    const extractionCheck = validateExtraction(resumeText);
+    if (extractionCheck.status === "EXTRACTION_FAILED") {
+      return sendError(
+        res,
+        "EXTRACTION_VALIDATION_FAILED",
+        "Cannot tailor resume: source document extraction failed or contains unverified binary content.",
+        422,
+        extractionCheck.quality
+      );
+    }
+
+    // Source Structured Resume Viability Gate
+    if (parsedResume) {
+      const hasSkills = Array.isArray(parsedResume.skills) && parsedResume.skills.length > 0;
+      const hasExperience = Array.isArray(parsedResume.experience) && parsedResume.experience.length > 0;
+      const hasSummary = Boolean(parsedResume.summary && parsedResume.summary.trim().length > 10);
+      if (!hasSkills && !hasExperience && !hasSummary) {
+        return sendError(
+          res,
+          "EMPTY_SOURCE_RESUME",
+          "Cannot tailor resume: source resume does not contain usable skills, experience, or summary.",
+          422
+        );
+      }
+    }
+
     // 1. Prepare structured requirements from frozen profile
     const structuredReqs: TargetRequirement[] = frozenProfile.structuredRequirements || [];
 
@@ -1701,7 +1748,7 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
     // 4. Compute After-Tailoring Stage 3 Evaluation
     const afterEval = evaluateResumeAgainstRequirements(beforeParsed, structuredReqs, result.tailoredContent);
     const scoreComparison = compareScores(beforeEval, afterEval);
-    const finality = evaluateFinality(validation, scoreComparison);
+    const finality = evaluateFinality(validation, scoreComparison, extractionCheck.status);
 
     result.scoreComparison = scoreComparison;
     result.validation = validation;
@@ -1722,7 +1769,7 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
 });
 
 // Stage 5 Pipeline: Server-Side DOCX & Print HTML Export Endpoints (0 AI Calls)
-app.post("/api/export-resume-docx", (req, res) => {
+app.post("/api/export-resume-docx", async (req, res) => {
   try {
     const { tailoredContent, parsedResume, targetCompany, targetRole } = req.body;
     if (!tailoredContent || typeof tailoredContent !== "string") {
@@ -1734,38 +1781,25 @@ app.post("/api/export-resume-docx", (req, res) => {
       return sendError(res, "EXPORT_VALIDATION_FAILED", "Resume is not in valid exportable state.", 422, readiness.errors);
     }
 
-    const filename = sanitizeExportFileName(parsedResume?.contactInfo?.name, targetRole, "docx");
-    const htmlBody = generatePrintableHtml(tailoredContent, parsedResume);
-    const docxTemplate = `
-<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head>
-  <meta charset="utf-8">
-  <title>${filename}</title>
-  <!--[if gte mso 9]>
-  <xml>
-    <w:WordDocument>
-      <w:View>Print</w:View>
-      <w:Zoom>100</w:Zoom>
-      <w:DoNotOptimizeForBrowser/>
-    </w:WordDocument>
-  </xml>
-  <![endif]-->
-  <style>
-    body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.3; color: #000; }
-    h1 { font-size: 18pt; font-weight: bold; border-bottom: 2pt solid #000; margin-bottom: 4pt; }
-    h2 { font-size: 13pt; font-weight: bold; border-bottom: 1pt solid #666; margin-top: 12pt; margin-bottom: 4pt; }
-    h3 { font-size: 11pt; font-weight: bold; margin-top: 8pt; margin-bottom: 2pt; }
-    li { font-size: 10.5pt; margin-bottom: 3pt; }
-  </style>
-</head>
-<body>
-  ${htmlBody}
-</body>
-</html>`;
+    const candidateName = parsedResume?.contactInfo?.name || "Candidate";
+    const filename = sanitizeExportFileName(candidateName, targetCompany, targetRole, "docx");
+
+    const docxBuffer = await generateDocxBuffer(tailoredContent, parsedResume);
+
+    // Validate package integrity before sending
+    const validation = await validateDocxPackage(docxBuffer);
+    if (!validation.isValid) {
+      return sendError(
+        res,
+        "DOCX_VALIDATION_FAILED",
+        `Generated DOCX package failed integrity validation: ${validation.error}`,
+        500
+      );
+    }
 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Content-Type", "application/msword");
-    return res.send(docxTemplate);
+    res.setHeader("Content-Type", DOCX_MIME_TYPE);
+    return res.end(docxBuffer);
   } catch (error: any) {
     console.error("Error in /api/export-resume-docx:", error);
     return sendError(res, "DOCX_GENERATION_FAILED", "Failed to generate DOCX document.", 500);

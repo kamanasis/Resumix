@@ -1,4 +1,8 @@
 import { ParsedResume } from "../types";
+import { Document, Paragraph, TextRun, HeadingLevel, Packer } from "docx";
+import { validateDocxPackage } from "./docxValidator";
+
+export const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 // ============================================================================
 // RESUMIX STAGE 5: DETERMINISTIC EXPORT & DOCUMENT RENDERING ENGINE
@@ -197,38 +201,121 @@ export function generatePrintableHtml(
 }
 
 /**
- * Generates an ATS-friendly, Word-compliant DOCX (HTML/MIME Word format) document.
+ * Parses markdown inline formatting (**bold**, *italic*) into TextRun array for docx.
  */
-export function generateDocxBlob(markdown: string, parsedResume?: ParsedResume): Blob {
-  const htmlBody = generatePrintableHtml(markdown, parsedResume);
-  const docxTemplate = `
-<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head>
-  <meta charset="utf-8">
-  <title>Resume</title>
-  <!--[if gte mso 9]>
-  <xml>
-    <w:WordDocument>
-      <w:View>Print</w:View>
-      <w:Zoom>100</w:Zoom>
-      <w:DoNotOptimizeForBrowser/>
-    </w:WordDocument>
-  </xml>
-  <![endif]-->
-  <style>
-    body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.3; }
-    h1 { font-size: 18pt; font-weight: bold; border-bottom: 2pt solid #333; margin-bottom: 4pt; }
-    h2 { font-size: 13pt; font-weight: bold; border-bottom: 1pt solid #666; margin-top: 12pt; margin-bottom: 4pt; }
-    h3 { font-size: 11pt; font-weight: bold; margin-top: 8pt; margin-bottom: 2pt; }
-    li { font-size: 10.5pt; margin-bottom: 3pt; }
-  </style>
-</head>
-<body>
-  ${htmlBody}
-</body>
-</html>`;
+function parseMarkdownRuns(text: string): TextRun[] {
+  const runs: TextRun[] = [];
+  const regex = /(\*\*[^*]+\*\*|\*[^*]+\*|[^*]+)/g;
+  let match: RegExpExecArray | null;
 
-  return new Blob([docxTemplate], { type: "application/msword" });
+  while ((match = regex.exec(text)) !== null) {
+    const chunk = match[0];
+    if (chunk.startsWith("**") && chunk.endsWith("**") && chunk.length >= 4) {
+      runs.push(new TextRun({ text: chunk.slice(2, -2), bold: true }));
+    } else if (chunk.startsWith("*") && chunk.endsWith("*") && chunk.length >= 2) {
+      runs.push(new TextRun({ text: chunk.slice(1, -1), italics: true }));
+    } else {
+      runs.push(new TextRun({ text: chunk }));
+    }
+  }
+
+  return runs.length > 0 ? runs : [new TextRun({ text })];
+}
+
+/**
+ * Builds a structured docx.Document adhering strictly to OpenXML standards.
+ */
+export function buildDocxDocument(markdown: string, _parsedResume?: ParsedResume): Document {
+  const lines = markdown.split("\n");
+  const children: Paragraph[] = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      children.push(new Paragraph({ spacing: { after: 100 } }));
+      continue;
+    }
+
+    if (line.startsWith("# ")) {
+      children.push(new Paragraph({
+        text: line.substring(2).trim(),
+        heading: HeadingLevel.HEADING_1,
+        spacing: { after: 120, before: 120 }
+      }));
+    } else if (line.startsWith("## ")) {
+      children.push(new Paragraph({
+        text: line.substring(3).trim(),
+        heading: HeadingLevel.HEADING_2,
+        spacing: { after: 80, before: 160 }
+      }));
+    } else if (line.startsWith("### ")) {
+      children.push(new Paragraph({
+        text: line.substring(4).trim(),
+        heading: HeadingLevel.HEADING_3,
+        spacing: { after: 60, before: 100 }
+      }));
+    } else if (line.startsWith("- ") || line.startsWith("* ")) {
+      const bulletContent = line.substring(2).trim();
+      children.push(new Paragraph({
+        children: parseMarkdownRuns(bulletContent),
+        bullet: { level: 0 },
+        spacing: { after: 40 }
+      }));
+    } else {
+      children.push(new Paragraph({
+        children: parseMarkdownRuns(line),
+        spacing: { after: 80 }
+      }));
+    }
+  }
+
+  return new Document({
+    sections: [{
+      properties: {
+        page: {
+          margin: {
+            top: 720,    // 0.5 inch (720 dxa)
+            right: 720,
+            bottom: 720,
+            left: 720
+          }
+        }
+      },
+      children
+    }]
+  });
+}
+
+/**
+ * Generates an ATS-friendly, genuine Microsoft Word OpenXML DOCX Blob.
+ * Validates the output package before returning.
+ */
+export async function generateDocxBlob(markdown: string, parsedResume?: ParsedResume): Promise<Blob> {
+  const doc = buildDocxDocument(markdown, parsedResume);
+  const blob = await Packer.toBlob(doc);
+  const validation = await validateDocxPackage(blob);
+
+  if (!validation.isValid) {
+    throw new Error(`Generated DOCX package validation failed: ${validation.error}`);
+  }
+
+  return blob;
+}
+
+/**
+ * Generates an ATS-friendly, genuine Microsoft Word OpenXML DOCX Buffer for Node.js.
+ * Validates the output package before returning.
+ */
+export async function generateDocxBuffer(markdown: string, parsedResume?: ParsedResume): Promise<Buffer> {
+  const doc = buildDocxDocument(markdown, parsedResume);
+  const buffer = await Packer.toBuffer(doc);
+  const validation = await validateDocxPackage(buffer);
+
+  if (!validation.isValid) {
+    throw new Error(`Generated DOCX package validation failed: ${validation.error}`);
+  }
+
+  return buffer;
 }
 
 /**

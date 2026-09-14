@@ -37,7 +37,8 @@ import {
   sanitizeExportFileName, 
   generatePrintableHtml, 
   generateDocxBlob, 
-  triggerDownload 
+  triggerDownload,
+  DOCX_MIME_TYPE
 } from "../lib/exportEngine";
 
 export interface UnifiedHistoryItem {
@@ -368,7 +369,7 @@ export default function AnalysisHistory({
     }
   };
 
-  const handleExport = (format: "pdf" | "docx" | "md", item: UnifiedHistoryItem) => {
+  const handleExport = async (format: "pdf" | "docx" | "md", item: UnifiedHistoryItem) => {
     const content = item.tailoredContent;
     if (!content) return;
     const filename = sanitizeExportFileName(
@@ -379,8 +380,13 @@ export default function AnalysisHistory({
     );
 
     if (format === "docx") {
-      const docxBlob = generateDocxBlob(content);
-      triggerDownload(docxBlob, filename);
+      try {
+        const docxBlob = await generateDocxBlob(content);
+        triggerDownload(docxBlob, filename, DOCX_MIME_TYPE);
+      } catch (err: any) {
+        console.error("DOCX generation error:", err);
+        alert(err.message || "Failed to generate DOCX document.");
+      }
     } else if (format === "md") {
       const mdBlob = new Blob([content], { type: "text/markdown;charset=utf-8;" });
       triggerDownload(mdBlob, filename);

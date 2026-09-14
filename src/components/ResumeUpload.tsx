@@ -6,6 +6,7 @@ import {
 import { collection, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { validateExtraction } from "../lib/extractionValidator";
+import { extractTextFromDocx } from "../lib/docxExtractor";
 import { ExtractionQuality, ExtractionStatus } from "../types";
 
 interface ResumeUploadProps {
@@ -50,47 +51,51 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
           reader.onerror = () => reject(new Error("Failed to read text file."));
           reader.readAsText(file);
         });
+      } else if (file.name.toLowerCase().endsWith(".docx") || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+        // Genuine OpenXML DOCX parsing via JSZip
+        const buffer = await file.arrayBuffer();
+        const extraction = await extractTextFromDocx(buffer);
+        if (!extraction.success) {
+          throw new Error(extraction.error || "Failed to extract text from DOCX file. File may be corrupted or unreadable.");
+        }
+        textContent = extraction.text;
       } else {
-        // Binary files (PDF, DOC, DOCX, etc.)
-        textContent = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onerror = () => reject(new Error("Failed to read binary file."));
-          reader.onload = (e) => {
-            const buffer = e.target?.result as ArrayBuffer;
-            if (!buffer) {
-              resolve("");
-              return;
-            }
-            const uint8 = new Uint8Array(buffer);
-            let extracted = "";
-            let chunk = "";
-            for (let i = 0; i < uint8.length; i++) {
-              const char = uint8[i];
-              // Keep printable ASCII + whitespace
-              if ((char >= 32 && char <= 126) || char === 10 || char === 13 || char === 9) {
-                chunk += String.fromCharCode(char);
-              } else {
-                if (chunk.trim().length > 2) {
-                  extracted += chunk + " ";
-                }
-                chunk = "";
+        // Binary files (PDF, DOC, etc.)
+        const buffer = await file.arrayBuffer();
+        const uint8 = new Uint8Array(buffer);
+
+        // Check if file is secretly a DOCX archive with wrong extension
+        if (uint8.length >= 4 && uint8[0] === 0x50 && uint8[1] === 0x4B && uint8[2] === 0x03 && uint8[3] === 0x04) {
+          const extraction = await extractTextFromDocx(buffer);
+          if (extraction.success && extraction.text.trim().length > 0) {
+            textContent = extraction.text;
+          }
+        }
+
+        if (!textContent) {
+          let extracted = "";
+          let chunk = "";
+          for (let i = 0; i < uint8.length; i++) {
+            const char = uint8[i];
+            if ((char >= 32 && char <= 126) || char === 10 || char === 13 || char === 9) {
+              chunk += String.fromCharCode(char);
+            } else {
+              if (chunk.trim().length > 2) {
+                extracted += chunk + " ";
               }
+              chunk = "";
             }
-            if (chunk.trim().length > 2) {
-              extracted += chunk;
-            }
+          }
+          if (chunk.trim().length > 2) {
+            extracted += chunk;
+          }
 
-            // Clean up PDF markers/clutter
-            const cleaned = extracted
-              .replace(/\/[\w]+/g, "")
-              .replace(/\[\d+\]/g, "")
-              .replace(/\s+/g, " ")
-              .trim();
-
-            resolve(cleaned);
-          };
-          reader.readAsArrayBuffer(file);
-        });
+          textContent = extracted
+            .replace(/\/[\w]+/g, "")
+            .replace(/\[\d+\]/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
       }
 
       const { status, quality, userMessage } = validateExtraction(textContent, {

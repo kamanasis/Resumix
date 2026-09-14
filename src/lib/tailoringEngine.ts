@@ -144,9 +144,10 @@ export function compareScores(
  */
 export function evaluateFinality(
   validation: ValidationResult,
-  scoreComparison: ScoreComparison
+  scoreComparison: ScoreComparison,
+  extractionStatus?: string
 ): { isFinalVersion: boolean; finalityStatus: "OPTIMIZING" | "FINAL_OPTIMIZED" | "VALIDATION_FAILED" } {
-  if (!validation.isValid) {
+  if (!validation.isValid || extractionStatus === "EXTRACTION_FAILED") {
     return { isFinalVersion: false, finalityStatus: "VALIDATION_FAILED" };
   }
 

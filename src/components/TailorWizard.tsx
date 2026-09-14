@@ -21,13 +21,14 @@ import {
   Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers, Briefcase,
   CheckCircle2, X, ChevronRight, HelpCircle, Target, Award, ShieldCheck,
   Zap, BookOpen, AlertCircle, ArrowUpRight, Search, ListFilter, Activity,
-  Building2, Brain, ThumbsUp, ThumbsDown
+  Building2, Brain, ThumbsUp, ThumbsDown, UploadCloud, ClipboardPaste
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { validateExportReadiness, verifyExportContentIntegrity } from "../lib/exportValidator";
-import { sanitizeExportFileName, generateDocxBlob, generatePrintableHtml, triggerDownload } from "../lib/exportEngine";
+import { sanitizeExportFileName, generateDocxBlob, generatePrintableHtml, triggerDownload, DOCX_MIME_TYPE } from "../lib/exportEngine";
+import { validateExtraction } from "../lib/extractionValidator";
 
 interface TailorWizardProps {
   userId: string;
@@ -156,7 +157,7 @@ export default function TailorWizard({
   } | null>(null);
 
   // Pipeline states
-  const [step, setStep] = useState<"SETUP" | "PROCESSING" | "DASHBOARD" | "LOCKED" | "ERROR">("SETUP");
+  const [step, setStep] = useState<"SETUP" | "PROCESSING" | "DASHBOARD" | "LOCKED" | "ERROR" | "EXTRACTION_ERROR">("SETUP");
   const [loadingMessage, setLoadingMessage] = useState("");
   const [errorDetails, setErrorDetails] = useState<{ title: string; message: string }>({ title: "", message: "" });
   const [pipelineStage, setPipelineStage] = useState(1);
@@ -568,12 +569,14 @@ export default function TailorWizard({
     }
 
     // Pre-Analysis Resume Quality Gate
-    if (selectedResume.extractionStatus === "EXTRACTION_FAILED") {
-      setErrorDetails({
-        title: "Resume Extraction Incomplete",
-        message: "The selected resume has an incomplete or corrupted text extraction. Please edit or re-upload the file in your Resume Vault before running an ATS analysis."
-      });
-      setStep("ERROR");
+    const extractionCheck = validateExtraction(selectedResume.content || "", {
+      name: selectedResume.name,
+      size: selectedResume.size,
+      type: selectedResume.type
+    });
+
+    if (selectedResume.extractionStatus === "EXTRACTION_FAILED" || extractionCheck.status === "EXTRACTION_FAILED") {
+      setStep("EXTRACTION_ERROR");
       return;
     }
 
@@ -849,6 +852,14 @@ export default function TailorWizard({
 
   const handleBatchTailor = async () => {
     if (selectedItems.length === 0) return;
+
+    // Hard Extraction Gate Check before tailoring
+    const extractionCheck = validateExtraction(selectedResume?.content || "");
+    if (extractionCheck.status === "EXTRACTION_FAILED" || selectedResume?.extractionStatus === "EXTRACTION_FAILED") {
+      setStep("EXTRACTION_ERROR");
+      return;
+    }
+
     setIsBatchTailoring(true);
 
     try {
@@ -973,10 +984,17 @@ export default function TailorWizard({
     setTimeout(() => setCopiedText(false), 2000);
   };
 
-  const handleExport = (format: "pdf" | "docx" | "md" | "print") => {
+  const handleExport = async (format: "pdf" | "docx" | "md" | "print") => {
     setExportError(null);
     const content = batchResult?.tailoredContent || selectedResume?.content || "";
     
+    // Hard Extraction Gate Check for Export
+    const extractionCheck = validateExtraction(selectedResume?.content || "");
+    if (extractionCheck.status === "EXTRACTION_FAILED" || selectedResume?.extractionStatus === "EXTRACTION_FAILED") {
+      setExportError("Export blocked: source document extraction failed or contains unverified binary content.");
+      return;
+    }
+
     // Strict Export Readiness Validation Gate
     const validation = validateExportReadiness({
       status: batchResult ? "FINAL_OPTIMIZED" : "DRAFT",
@@ -992,27 +1010,33 @@ export default function TailorWizard({
     const candidateName = parsedResume?.contactInfo?.name || "Candidate";
     const filename = sanitizeExportFileName(candidateName, targetCompany, targetRole, format === "docx" ? "docx" : format === "md" ? "md" : "html");
 
-    if (format === "docx") {
-      const docxBlob = generateDocxBlob(content, parsedResume || undefined);
-      triggerDownload(docxBlob, filename);
-    } else if (format === "md") {
-      const mdBlob = new Blob([content], { type: "text/markdown;charset=utf-8;" });
-      triggerDownload(mdBlob, filename);
-    } else if (format === "pdf" || format === "print") {
-      const htmlContent = generatePrintableHtml(content, `${targetRole} - ${candidateName}`);
-      const printWindow = window.open("", "_blank");
-      if (printWindow) {
-        printWindow.document.write(htmlContent);
-        printWindow.document.close();
-        printWindow.focus();
-        setTimeout(() => {
-          printWindow.print();
-        }, 500);
-      } else {
-        // Fallback to direct download of printable HTML
-        const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8;" });
-        triggerDownload(htmlBlob, filename);
+    try {
+      if (format === "docx") {
+        const docxBlob = await generateDocxBlob(content, parsedResume || undefined);
+        triggerDownload(docxBlob, filename, DOCX_MIME_TYPE);
+      } else if (format === "md") {
+        const mdBlob = new Blob([content], { type: "text/markdown;charset=utf-8;" });
+        triggerDownload(mdBlob, filename);
+      } else if (format === "pdf" || format === "print") {
+        const htmlContent = generatePrintableHtml(content, `${targetRole} - ${candidateName}`);
+        const printWindow = window.open("", "_blank");
+        if (printWindow) {
+          printWindow.document.write(htmlContent);
+          printWindow.document.close();
+          printWindow.focus();
+          setTimeout(() => {
+            printWindow.print();
+          }, 500);
+        } else {
+          // Fallback to direct download of printable HTML
+          const htmlBlob = new Blob([htmlContent], { type: "text/html;charset=utf-8;" });
+          triggerDownload(htmlBlob, filename);
+        }
       }
+    } catch (err: any) {
+      console.error("Export error:", err);
+      setExportError(err.message || "Failed to generate export file.");
+      return;
     }
 
     // Emit Learning Event: Resume Exported
@@ -1135,6 +1159,55 @@ export default function TailorWizard({
         <p className="text-[11px] text-slate-400 font-medium">
           Zero fabrication policy: Scores are strictly computed from verified resume text.
         </p>
+      </div>
+    );
+  }
+
+  // HARD EXTRACTION FAILURE STATE
+  if (step === "EXTRACTION_ERROR") {
+    return (
+      <div className="py-14 max-w-xl mx-auto w-full bg-white/90 backdrop-blur-xl border border-red-200 rounded-3xl p-8 shadow-sm text-center space-y-6 animate-fadeIn">
+        <div className="w-16 h-16 bg-red-100 border-2 border-red-200 rounded-2xl flex items-center justify-center mx-auto text-red-600 shadow-inner">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-800 rounded-full text-[11px] font-bold uppercase tracking-wider">
+            <span>Extraction Failed</span>
+          </div>
+          <h3 className="text-2xl font-display font-bold text-slate-900">
+            Resume extraction failed
+          </h3>
+          <p className="text-sm font-semibold text-slate-700">
+            We couldn't reliably read this document.
+          </p>
+          <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+            No tailored resume was generated because Resumix could not verify the source content.
+            The document appears to be corrupted, unreadable, an image-based scan without an OCR text layer, or an unparsed binary file stream.
+          </p>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          <button
+            onClick={() => {
+              setStep("SETUP");
+              if (onAnalysisCreated) onAnalysisCreated();
+            }}
+            className="w-full sm:w-auto px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <UploadCloud className="w-4 h-4" />
+            Re-upload Resume
+          </button>
+          <button
+            onClick={() => {
+              setStep("SETUP");
+            }}
+            className="w-full sm:w-auto px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <ClipboardPaste className="w-4 h-4" />
+            Review / Paste Resume Text
+          </button>
+        </div>
       </div>
     );
   }
@@ -2100,23 +2173,44 @@ export default function TailorWizard({
           /* BATCH TAILORED RESULT VIEW */
           <div className="space-y-6">
             {/* FINALITY BADGE & METRIC BAR */}
-            <div className="bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-transparent p-5 rounded-3xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-emerald-600" /> Final Tailored Resume
-                  </span>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    Verified Truth Preservation
-                  </span>
-                </div>
-                <h4 className="text-base font-bold text-slate-900">
-                  Target-Optimized Draft for {targetRole} at {targetCompany}
-                </h4>
-                <p className="text-xs text-slate-600">
-                  100% evidence-based improvements without fabricated metrics, companies, or unpossessed skills.
-                </p>
-              </div>
+            {(() => {
+              const extractionCheck = validateExtraction(selectedResume?.content || "");
+              const isExtractionPassed = selectedResume?.extractionStatus !== "EXTRACTION_FAILED" && extractionCheck.status !== "EXTRACTION_FAILED";
+              const hasStructuredData = Boolean(parsedResume && ((parsedResume.skills && parsedResume.skills.length > 0) || (parsedResume.experience && parsedResume.experience.length > 0) || (parsedResume.summary && parsedResume.summary.trim().length > 10)));
+              const isTailorValidated = (batchResult as any)?.validation?.isValid !== false && (batchResult as any)?.finalityStatus !== "VALIDATION_FAILED";
+              const isFinalStateValid = isExtractionPassed && hasStructuredData && isTailorValidated;
+
+              return (
+                <div className={`p-5 rounded-3xl border flex flex-col md:flex-row justify-between items-start md:items-center gap-4 ${
+                  isFinalStateValid 
+                    ? "bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-transparent border-emerald-500/30"
+                    : "bg-amber-50/70 border-amber-300"
+                }`}>
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      {isFinalStateValid ? (
+                        <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3 text-emerald-600" /> Final Tailored Resume
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-0.5 bg-amber-100 text-amber-800 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-amber-600" /> Draft — Verification Pending
+                        </span>
+                      )}
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        {isFinalStateValid ? "Verified Truth Preservation" : "Unverified Source Extraction"}
+                      </span>
+                    </div>
+                    <h4 className="text-base font-bold text-slate-900">
+                      Target-Optimized Draft for {targetRole} at {targetCompany}
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      {isFinalStateValid 
+                        ? "100% evidence-based improvements without fabricated metrics, companies, or unpossessed skills."
+                        : "Extraction failed or source document could not be verified. This draft cannot be marked Final or Ready to Apply."
+                      }
+                    </p>
+                  </div>
 
               {/* BEFORE VS AFTER SCORE COMPARISON */}
               {batchResult && (batchResult as any).scoreComparison && (
@@ -2136,6 +2230,8 @@ export default function TailorWizard({
                 </div>
               )}
             </div>
+          );
+        })()}
 
             {/* EXPORT ACTION BUTTONS */}
             <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-200 shadow-sm">

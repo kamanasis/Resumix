@@ -59,7 +59,37 @@ export function validateExtraction(
     };
   }
 
-  // 2. Scanned PDF Detection (High file size but tiny character / word count)
+  // 2. Binary Archive & Unparsed File Stream Detection (DOCX/ZIP/PDF raw bytes)
+  const isZipSignature = trimmed.startsWith("PK\x03\x04") || trimmed.includes("PK\x03\x04") || trimmed.includes("PK\x05\x06");
+  const isOpenXmlArchive = trimmed.includes("[Content_Types].xml") || 
+                           trimmed.includes("word/document.xml") || 
+                           trimmed.includes("_rels/.rels") ||
+                           trimmed.includes("schemas.openxmlformats.org");
+  const isRawPdfStream = trimmed.startsWith("%PDF-") || (trimmed.includes("%PDF-") && trimmed.includes("xref"));
+  const hasNullBytes = trimmed.includes("\x00");
+  const isUnparsedBinaryExpl = trimmed.toLowerCase().includes("unparsed binary file stream") ||
+                               trimmed.toLowerCase().includes("docx package archive") ||
+                               trimmed.toLowerCase().includes("no extractable plain text experience");
+
+  if (isZipSignature || isOpenXmlArchive || isRawPdfStream || hasNullBytes || isUnparsedBinaryExpl) {
+    isCorrupted = true;
+    warnings.push("Document content appears to be an unparsed binary stream or archive package rather than readable resume text.");
+    return {
+      status: "EXTRACTION_FAILED",
+      quality: {
+        charCount,
+        wordCount,
+        qualityScore: 0,
+        isScanned: false,
+        isCorrupted: true,
+        detectedSections: [],
+        warnings
+      },
+      userMessage: "The document is an unreadable binary archive or corrupted file stream with no extractable resume text. Please upload a valid text-based PDF/DOCX or paste resume text."
+    };
+  }
+
+  // 3. Scanned PDF Detection (High file size but tiny character / word count)
   if (fileSize > 40000 && wordCount < 25) {
     isScanned = true;
     warnings.push(
@@ -67,7 +97,7 @@ export function validateExtraction(
     );
   }
 
-  // 3. Binary Garbage & Non-Printable Character Analysis
+  // 4. Binary Garbage & Non-Printable Character Analysis
   const printableMatches = trimmed.match(/[\x20-\x7E\r\n\t]/g) || [];
   const printableRatio = printableMatches.length / charCount;
   const alphaNumericMatches = trimmed.match(/[a-zA-Z0-9]/g) || [];
@@ -78,20 +108,20 @@ export function validateExtraction(
     warnings.push("Extracted content contains a high percentage of non-text binary artifacts.");
   }
 
-  // 4. Repeated Character / Infinite Loop Glitch Detection
+  // 5. Repeated Character / Infinite Loop Glitch Detection
   if (/(.)\1{20,}/.test(trimmed)) {
     isCorrupted = true;
     warnings.push("Document contains repeated character sequences indicative of an extraction decoder error.");
   }
 
-  // 5. Section Header Detection
+  // 6. Section Header Detection
   for (const sec of STANDARD_SECTION_HEADERS) {
     if (sec.regex.test(trimmed)) {
       detectedSections.push(sec.name);
     }
   }
 
-  // 6. Multi-Column Scrambling Anomaly Check
+  // 7. Multi-Column Scrambling Anomaly Check
   const lineCount = trimmed.split("\n").filter(l => l.trim().length > 0).length;
   const avgWordsPerLine = lineCount > 0 ? wordCount / lineCount : 0;
   if (avgWordsPerLine < 1.5 && lineCount > 40) {
