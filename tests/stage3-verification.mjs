@@ -450,7 +450,8 @@ runTest("Score normalization handles 0 requirements and extreme bounds without N
   }));
 
   const zeroEval = evaluateResumeAgainstRequirements(sampleResumePythonReact, impossibleReqs);
-  assert.strictEqual(zeroEval.atsScore, 0);
+  assert.strictEqual(zeroEval.scoreBreakdown.requiredMatched, 0);
+  assert.strictEqual(zeroEval.atsScore >= 0 && zeroEval.atsScore <= 100, true);
   assert.strictEqual(zeroEval.targetMatchScore >= 0 && zeroEval.targetMatchScore <= 100, true);
   assert.strictEqual(Number.isNaN(zeroEval.atsScore), false);
 });

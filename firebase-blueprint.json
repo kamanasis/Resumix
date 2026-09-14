@@ -53,6 +53,22 @@
         "targetRole",
         "createdAt"
       ]
+    },
+    "CompanyIntelligence": {
+      "title": "Company Intelligence Profile",
+      "description": "Public company resolution, verified careers presence, and observed hiring patterns",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "companyId": { "type": "string" },
+        "normalizedName": { "type": "string" },
+        "displayName": { "type": "string" },
+        "officialWebsite": { "type": "string" },
+        "confidence": { "type": "string" },
+        "status": { "type": "string" },
+        "lastUpdatedAt": { "type": "string" }
+      },
+      "required": ["id", "companyId", "normalizedName", "confidence", "status"]
     }
   },
   "firestore": {
@@ -67,6 +83,10 @@
     "/users/{userId}/analyses/{analysisId}": {
       "schema": "Analysis",
       "description": "User resume tailoring analyses subcollection"
+    },
+    "/companyIntelligence/{companyId}": {
+      "schema": "CompanyIntelligence",
+      "description": "Universal public company intelligence documents keyed by canonical company ID"
     }
   }
 }

@@ -5,3 +5,4 @@ export * from "./adapters";
 export * from "./jobDeduplicator";
 export * from "./jobSnapshotManager";
 export * from "./jobIngestionEngine";
+export * from "./publicCompanyService";

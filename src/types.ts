@@ -510,6 +510,11 @@ export interface CompanyEntity {
   domains: string[];
   careerDomains: string[];
   detectedSources: JobSourceReference[];
+  officialWebsite?: string;
+  domain?: string;
+  careersUrl?: string;
+  jobBoardProvider?: JobProvider;
+  resolutionStatus?: "CONFIDENT" | "AMBIGUOUS" | "UNVERIFIED";
   createdAt: string;
   updatedAt: string;
 }
@@ -715,6 +720,69 @@ export interface CompanyIntelligenceProfile {
   evidenceQuality: EvidenceStrength;
   datasetVersion: string;
   generatedAt: string;
+}
+
+export type CompanySourceType =
+  | "OFFICIAL_WEBSITE"
+  | "PUBLIC_CAREERS_PAGE"
+  | "JOB_BOARD_API"
+  | "PUBLIC_JOB_POSTING"
+  | "USER_SUPPLIED"
+  | "FIRESTORE_CACHE";
+
+export interface CompanySourceProvenance {
+  field: string;
+  value: any;
+  sourceType: CompanySourceType;
+  sourceUrl: string | null;
+  observedAt: string;
+  confidence: number;
+}
+
+export interface CompanyHiringSignal {
+  type: string;
+  summary: string;
+  observedCount: number;
+  recency: string;
+  evidenceSource?: string;
+}
+
+export type CompanyConfidenceTier = "HIGH" | "MEDIUM" | "LOW" | "UNVERIFIED";
+
+export type CompanyIntelligenceStatus = "VERIFIED" | "PARTIAL" | "UNVERIFIED" | "AMBIGUOUS";
+
+export interface CompanyIntelligence {
+  id: string;
+  companyId: string;
+  normalizedName: string;
+  displayName: string;
+  aliases: string[];
+  officialWebsite: string | null;
+  domain: string | null;
+  industry: string | null;
+  description: string | null;
+  headquarters: string | null;
+  locations: string[];
+  companySize: string | null;
+  careersUrl: string | null;
+  jobBoardProvider: JobProvider | null;
+  jobBoardIdentifier: string | null;
+  sourceRecords: CompanySourceProvenance[];
+  observedRoles: string[];
+  observedSkills: string[];
+  observedTechnologies: string[];
+  observedExperiencePatterns: ExperiencePattern[];
+  observedEducationPatterns: string[];
+  observedKeywords: string[];
+  hiringSignals: CompanyHiringSignal[];
+  confidence: CompanyConfidenceTier;
+  confidenceReasons: string[];
+  confidenceScore: number;
+  firstObservedAt: string;
+  lastUpdatedAt: string;
+  sourceCount: number;
+  status: CompanyIntelligenceStatus;
+  profile?: CompanyIntelligenceProfile;
 }
 
 export interface RoleIntelligenceProfile {

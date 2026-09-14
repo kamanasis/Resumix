@@ -4,7 +4,12 @@ import {
   RoleFamilyPattern, 
   RequirementTrend,
   RequirementFrequency,
-  EvidenceStrength
+  EvidenceStrength,
+  CompanyIntelligence,
+  CompanyEntity,
+  CompanyConfidenceTier,
+  CompanyIntelligenceStatus,
+  CompanySourceProvenance
 } from "../../types";
 import { 
   JobWithSnapshot, 
@@ -16,14 +21,7 @@ import {
   calculateLocationPatterns 
 } from "./roleIntelligenceEngine";
 import { calculateRequirementTrends } from "./trendEngine";
-
-// ============================================================================
-// RESUMIX STAGE 7: COMPANY INTELLIGENCE ENGINE
-// ============================================================================
-// Aggregates verified job postings across an entire organization.
-// Maps role family patterns, global top requirements, and temporal trends.
-// Strictly data-driven: company names are data, not application logic.
-// ============================================================================
+import { PublicCompanyEnrichmentResult } from "../jobEngine/publicCompanyService";
 
 export interface ExtendedCompanyIntelligenceProfile extends CompanyIntelligenceProfile {
   totalPostingsAnalyzed?: number;
@@ -155,5 +153,182 @@ export function buildCompanyIntelligenceProfile(
     isStale,
     disclaimer: "These percentages describe observed job-posting patterns from verified postings. They are NOT hiring, interview, or rejection decisions.",
     generatedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * Evaluates evidence quality and assigns a transparent confidence score.
+ */
+export function calculateCompanyConfidence(params: {
+  hasVerifiedWebsite: boolean;
+  hasJobBoard: boolean;
+  jobCount: number;
+  hasDescription: boolean;
+  resolutionStatus?: string;
+}): {
+  confidence: CompanyConfidenceTier;
+  confidenceScore: number;
+  confidenceReasons: string[];
+} {
+  const reasons: string[] = [];
+  let score = 0.2;
+
+  if (params.resolutionStatus === "AMBIGUOUS") {
+    reasons.push("Multiple similar entity names exist without unambiguous domain confirmation.");
+    return {
+      confidence: "LOW",
+      confidenceScore: 0.3,
+      confidenceReasons: reasons
+    };
+  }
+
+  if (params.hasVerifiedWebsite) {
+    score += 0.35;
+    reasons.push("Official web domain verified.");
+  } else {
+    reasons.push("Official web presence could not be independently confirmed.");
+  }
+
+  if (params.hasJobBoard) {
+    score += 0.25;
+    reasons.push("Active public careers / ATS portal detected.");
+  }
+
+  if (params.jobCount >= 10) {
+    score += 0.25;
+    reasons.push(`Strong public sample size: ${params.jobCount} job postings analyzed.`);
+  } else if (params.jobCount >= 3) {
+    score += 0.15;
+    reasons.push(`Moderate public sample size: ${params.jobCount} job postings analyzed.`);
+  } else if (params.jobCount > 0) {
+    score += 0.08;
+    reasons.push(`Initial public sample size: ${params.jobCount} job posting analyzed.`);
+  } else {
+    reasons.push("Limited publicly available hiring data detected.");
+  }
+
+  if (params.hasDescription) {
+    score += 0.05;
+  }
+
+  score = Math.min(1.0, Math.max(0.1, Math.round(score * 100) / 100));
+
+  let confidence: CompanyConfidenceTier = "LOW";
+  if (score >= 0.75) {
+    confidence = "HIGH";
+  } else if (score >= 0.45) {
+    confidence = "MEDIUM";
+  } else if (score >= 0.25) {
+    confidence = "LOW";
+  } else {
+    confidence = "UNVERIFIED";
+  }
+
+  return {
+    confidence,
+    confidenceScore: score,
+    confidenceReasons: reasons
+  };
+}
+
+/**
+ * Builds the comprehensive universal CompanyIntelligence model with source provenance.
+ */
+export function buildUniversalCompanyIntelligence(params: {
+  entity: CompanyEntity;
+  enrichment: PublicCompanyEnrichmentResult;
+  profile?: ExtendedCompanyIntelligenceProfile;
+}): CompanyIntelligence {
+  const { entity, enrichment, profile } = params;
+  const now = new Date().toISOString();
+
+  const id = `comp_intel_${entity.companyId.replace(/^comp_/, "")}`;
+  const hasVerifiedWebsite = Boolean(enrichment.officialWebsite);
+  const hasJobBoard = Boolean(enrichment.jobBoardProvider || enrichment.careersUrl);
+  const jobCount = enrichment.discoveredJobCount || profile?.sampleSize || 0;
+  const hasDescription = Boolean(enrichment.description);
+
+  const { confidence, confidenceScore, confidenceReasons } = calculateCompanyConfidence({
+    hasVerifiedWebsite,
+    hasJobBoard,
+    jobCount,
+    hasDescription,
+    resolutionStatus: entity.resolutionStatus
+  });
+
+  let status: CompanyIntelligenceStatus = "UNVERIFIED";
+  if (entity.resolutionStatus === "AMBIGUOUS") {
+    status = "AMBIGUOUS";
+  } else if (confidence === "HIGH") {
+    status = "VERIFIED";
+  } else if (confidence === "MEDIUM" || confidence === "LOW") {
+    status = "PARTIAL";
+  }
+
+  // Deduplicate and combine source provenance
+  const sourceRecords: CompanySourceProvenance[] = [...enrichment.sourceRecords];
+  if (entity.detectedSources) {
+    for (const s of entity.detectedSources) {
+      sourceRecords.push({
+        field: "detectedSource",
+        value: s.provider,
+        sourceType: "JOB_BOARD_API",
+        sourceUrl: s.sourceUrl,
+        observedAt: s.retrievedAt || now,
+        confidence: 0.9
+      });
+    }
+  }
+
+  // Top observed technologies
+  const techCategories = new Set(["TOOL", "FRAMEWORK", "LANGUAGE", "DATABASE", "CLOUD"]);
+  const skillCategories = new Set(["TECHNICAL_SKILL", "SOFT_SKILL", "DOMAIN_KNOWLEDGE"]);
+
+  const observedTechnologies = enrichment.observedTechnologies.length > 0
+    ? enrichment.observedTechnologies
+    : profile?.topRequirements?.filter(r => techCategories.has(r.category)).map(r => r.canonicalName).slice(0, 15) || [];
+
+  const observedSkills = enrichment.observedSkills.length > 0
+    ? enrichment.observedSkills
+    : profile?.topRequirements?.filter(r => skillCategories.has(r.category)).map(r => r.canonicalName).slice(0, 15) || [];
+
+  const observedRoles = enrichment.observedRoles.length > 0
+    ? enrichment.observedRoles
+    : profile?.roleFamilies?.map(r => r.canonicalRole).slice(0, 10) || [];
+
+  const observedExperiencePatterns = profile?.experiencePatterns || [];
+
+  return {
+    id,
+    companyId: entity.companyId,
+    normalizedName: entity.canonicalName,
+    displayName: entity.rawName || entity.canonicalName,
+    aliases: entity.aliases || [],
+    officialWebsite: enrichment.officialWebsite || entity.officialWebsite || null,
+    domain: enrichment.domain || entity.domain || null,
+    industry: enrichment.industry || null,
+    description: enrichment.description || null,
+    headquarters: enrichment.headquarters || null,
+    locations: enrichment.locations || [],
+    companySize: enrichment.companySize || null,
+    careersUrl: enrichment.careersUrl || entity.careersUrl || null,
+    jobBoardProvider: enrichment.jobBoardProvider || entity.jobBoardProvider || null,
+    jobBoardIdentifier: enrichment.jobBoardIdentifier || null,
+    sourceRecords,
+    observedRoles,
+    observedSkills,
+    observedTechnologies,
+    observedExperiencePatterns,
+    observedEducationPatterns: [],
+    observedKeywords: enrichment.observedKeywords || [],
+    hiringSignals: enrichment.hiringSignals || [],
+    confidence,
+    confidenceReasons,
+    confidenceScore,
+    firstObservedAt: entity.createdAt || now,
+    lastUpdatedAt: now,
+    sourceCount: sourceRecords.length,
+    status,
+    profile
   };
 }

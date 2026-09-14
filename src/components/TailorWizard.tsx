@@ -7,7 +7,8 @@ import {
   MissingItem, 
   TailorRecommendation,
   GapClassification,
-  PriorityTier
+  PriorityTier,
+  CompanyIntelligence
 } from "../types";
 import { 
   Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, TrendingDown,
@@ -15,7 +16,8 @@ import {
   RefreshCw, XCircle, ArrowLeft, Printer, FileText, FileSpreadsheet,
   Link, Globe, ExternalLink, BarChart3, ShieldAlert, Layers, Briefcase,
   CheckCircle2, X, ChevronRight, HelpCircle, Target, Award, ShieldCheck,
-  Zap, BookOpen, AlertCircle, ArrowUpRight, Search, ListFilter, Activity
+  Zap, BookOpen, AlertCircle, ArrowUpRight, Search, ListFilter, Activity,
+  Building2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
@@ -252,6 +254,48 @@ export default function TailorWizard({
     }
   };
 
+  // Company Intelligence states
+  const [companyIntelligence, setCompanyIntelligence] = useState<CompanyIntelligence | null>(null);
+  const [isLoadingCompanyIntel, setIsLoadingCompanyIntel] = useState(false);
+
+  const fetchCompanyIntelligence = async (companyName: string, suppliedUrl?: string, suppliedJd?: string) => {
+    if (!companyName || companyName.trim().length < 2) {
+      setCompanyIntelligence(null);
+      return;
+    }
+    setIsLoadingCompanyIntel(true);
+    try {
+      const res = await fetch("/api/company/intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: companyName.trim(),
+          jobUrl: suppliedUrl?.trim() || undefined,
+          jobDescription: suppliedJd?.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.data) {
+        setCompanyIntelligence(data.data);
+      }
+    } catch (err: any) {
+      console.warn("Company intelligence fetch non-blocking error:", err);
+    } finally {
+      setIsLoadingCompanyIntel(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!targetCompany || targetCompany.trim().length < 2) {
+      setCompanyIntelligence(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      fetchCompanyIntelligence(targetCompany, jobUrl, jobDescription);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [targetCompany, jobUrl, jobDescription]);
+
   const [trackedSuccess, setTrackedSuccess] = useState(false);
 
   const handleTrackApplication = async () => {
@@ -362,7 +406,7 @@ export default function TailorWizard({
     setErrorDetails({ title: "", message: "" });
 
     try {
-      // Stage 1: Parse Resume Structure
+      // Resume Structure Analysis
       setLoadingMessage("Analyzing resume structure and extracting verified entities...");
       const { res: parseRes, json: parseJson } = await safeFetchJson("/api/parse-resume", {
         method: "POST",
@@ -382,7 +426,7 @@ export default function TailorWizard({
       const parsedData: ParsedResume = parseJson.data;
       setParsedResume(parsedData);
 
-      // Stage 2: Extract Frozen Requirement Profile
+      // Requirement Profile Extraction
       setPipelineStage(2);
       setLoadingMessage("Extracting and normalizing target job requirements...");
       const { res: profileRes, json: profileJson } = await safeFetchJson("/api/generate-requirement-profile", {
@@ -1973,6 +2017,129 @@ export default function TailorWizard({
               </div>
             </div>
 
+            {/* COMPANY INTELLIGENCE PROFILE SECTION */}
+            {companyIntelligence && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 bg-cyan-50 text-cyan-700 border border-cyan-200/60 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                        <Building2 className="w-3 h-3 text-cyan-600" />
+                        Company Intelligence
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        companyIntelligence.confidence === "HIGH" ? "bg-emerald-100 text-emerald-800 border border-emerald-300" :
+                        companyIntelligence.confidence === "MEDIUM" ? "bg-cyan-100 text-cyan-800 border border-cyan-300" :
+                        companyIntelligence.status === "AMBIGUOUS" ? "bg-amber-100 text-amber-800 border border-amber-300" :
+                        "bg-slate-100 text-slate-700 border border-slate-300"
+                      }`}>
+                        {companyIntelligence.status === "AMBIGUOUS" ? "Ambiguous Entity" : `${companyIntelligence.confidence} Confidence (${Math.round(companyIntelligence.confidenceScore * 100)}%)`}
+                      </span>
+                    </div>
+                    <h4 className="text-lg font-display font-bold text-slate-900 flex items-center gap-2">
+                      <span>{companyIntelligence.normalizedName}</span>
+                      {companyIntelligence.status === "VERIFIED" && (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" title="Verified Entity" />
+                      )}
+                    </h4>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {companyIntelligence.officialWebsite && (
+                      <a
+                        href={companyIntelligence.officialWebsite}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all"
+                      >
+                        <Globe className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Website</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                    {companyIntelligence.careersUrl && (
+                      <a
+                        href={companyIntelligence.careersUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 text-cyan-800 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all"
+                      >
+                        <Briefcase className="w-3.5 h-3.5 text-cyan-600" />
+                        <span>Public Careers</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                {/* Company Metadata Row */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3 bg-slate-50/60 rounded-xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Job Board Provider</span>
+                    <span className="font-bold text-slate-800">
+                      {companyIntelligence.jobBoardProvider || "Unspecified / Web Feed"}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-slate-50/60 rounded-xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Known Locations</span>
+                    <span className="font-bold text-slate-800 truncate block" title={companyIntelligence.locations.join(", ")}>
+                      {companyIntelligence.locations.length > 0 ? companyIntelligence.locations.slice(0, 2).join(", ") : "Remote / Unspecified"}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-slate-50/60 rounded-xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Source Evidence</span>
+                    <span className="font-bold text-slate-800">
+                      {companyIntelligence.sourceCount} verified source records
+                    </span>
+                  </div>
+                  <div className="p-3 bg-slate-50/60 rounded-xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Last Observed</span>
+                    <span className="font-bold text-slate-800">
+                      {new Date(companyIntelligence.lastUpdatedAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Description if present */}
+                {companyIntelligence.description && (
+                  <p className="text-xs text-slate-600 leading-relaxed bg-slate-50/40 p-3 rounded-xl border border-slate-100">
+                    {companyIntelligence.description}
+                  </p>
+                )}
+
+                {/* Frequently Observed Technologies */}
+                {companyIntelligence.observedTechnologies.length > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                      Commonly Observed Technologies in Public Postings
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {companyIntelligence.observedTechnologies.map((tech, idx) => (
+                        <span 
+                          key={tech} 
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold border ${
+                            idx < 3 ? "bg-cyan-50 text-cyan-900 border-cyan-200" :
+                            idx < 7 ? "bg-slate-100 text-slate-800 border-slate-200" :
+                            "bg-white text-slate-600 border-slate-200"
+                          }`}
+                        >
+                          {tech}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Confidence reasons */}
+                {companyIntelligence.confidenceReasons.length > 0 && (
+                  <div className="pt-2 border-t border-slate-100 flex items-center gap-2 text-[11px] text-slate-500">
+                    <ShieldCheck className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>Evidence Basis: {companyIntelligence.confidenceReasons.join(" • ")}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ERROR OR LOADING STATE */}
             {isLoadingIntelligence && (
               <div className="p-12 bg-white border border-slate-200 rounded-3xl text-center space-y-3">
@@ -2325,6 +2492,51 @@ export default function TailorWizard({
               value={targetCompany} onChange={(e) => setTargetCompany(e.target.value)}
               className="w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm focus:outline-none focus:border-cyan-400 transition-all font-medium"
             />
+            {isLoadingCompanyIntel ? (
+              <div className="mt-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-500 flex items-center gap-1.5">
+                <RefreshCw className="w-3 h-3 animate-spin text-cyan-600" />
+                <span>Resolving company & public signals...</span>
+              </div>
+            ) : companyIntelligence ? (
+              <div className="mt-2 p-2.5 bg-cyan-50/70 border border-cyan-200/80 rounded-xl text-xs space-y-1.5">
+                <div className="flex items-center justify-between flex-wrap gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
+                    <span className="font-bold text-slate-800">{companyIntelligence.normalizedName}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                      companyIntelligence.confidence === "HIGH" ? "bg-emerald-100 text-emerald-800 border border-emerald-300" :
+                      companyIntelligence.confidence === "MEDIUM" ? "bg-cyan-100 text-cyan-800 border border-cyan-300" :
+                      companyIntelligence.status === "AMBIGUOUS" ? "bg-amber-100 text-amber-800 border border-amber-300" :
+                      "bg-slate-100 text-slate-700 border border-slate-300"
+                    }`}>
+                      {companyIntelligence.status === "AMBIGUOUS" ? "Ambiguous Entity" : `${companyIntelligence.confidence} Confidence`}
+                    </span>
+                  </div>
+                  {companyIntelligence.officialWebsite && (
+                    <a 
+                      href={companyIntelligence.officialWebsite} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="text-[11px] font-bold text-cyan-600 hover:text-cyan-700 flex items-center gap-0.5"
+                    >
+                      <span>{companyIntelligence.domain || "Website"}</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-slate-600 flex-wrap">
+                  {companyIntelligence.jobBoardProvider && (
+                    <span className="flex items-center gap-1 font-semibold text-cyan-800">
+                      <CheckCircle2 className="w-3 h-3 text-cyan-600" />
+                      ATS: {companyIntelligence.jobBoardProvider}
+                    </span>
+                  )}
+                  {companyIntelligence.observedTechnologies.length > 0 && (
+                    <span className="truncate max-w-xs">Tech: {companyIntelligence.observedTechnologies.slice(0, 3).join(", ")}</span>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
           <div>
             <label className="block text-slate-700 text-xs font-bold mb-2 uppercase tracking-wider">Target Job Role *</label>

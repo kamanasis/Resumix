@@ -31,7 +31,10 @@ import {
   validateExportReadiness
 } from "./src/lib/exportValidator";
 import { globalJobIngestionEngine } from "./src/lib/jobEngine";
-import { globalIntelligenceEngine } from "./src/lib/intelligenceEngine";
+import { 
+  globalIntelligenceEngine, 
+  globalCompanyIntelligenceStore 
+} from "./src/lib/intelligenceEngine";
 import { 
   globalApplicationStore, 
   globalOutcomeIntelligenceEngine, 
@@ -1916,6 +1919,63 @@ app.get("/api/intelligence/role/:roleId", async (req, res) => {
     return sendSuccess(res, profile);
   } catch (error: any) {
     return sendError(res, "ROLE_QUERY_FAILED", "Failed to query role intelligence.", 500, error.message);
+  }
+});
+
+// Universal Company Intelligence API Routes
+app.post("/api/company/resolve", async (req, res) => {
+  try {
+    const { companyName, website, jobUrl, jobDescription } = req.body;
+    if (!companyName || typeof companyName !== "string" || !companyName.trim()) {
+      return sendError(res, "INVALID_COMPANY_NAME", "companyName is required.", 400);
+    }
+    const resolved = globalCompanyIntelligenceStore.resolve({
+      rawName: companyName.trim(),
+      website,
+      jobUrl,
+      jobDescription
+    });
+    return sendSuccess(res, resolved);
+  } catch (error: any) {
+    return sendError(res, "COMPANY_RESOLUTION_FAILED", "Failed to resolve company.", 500, error.message);
+  }
+});
+
+app.post("/api/company/intelligence", async (req, res) => {
+  try {
+    const { companyName, website, jobUrl, jobDescription, refresh } = req.body;
+    if (!companyName || typeof companyName !== "string" || !companyName.trim()) {
+      return sendError(res, "INVALID_COMPANY_NAME", "companyName is required.", 400);
+    }
+    const intelligence = await globalCompanyIntelligenceStore.getIntelligence({
+      companyName: companyName.trim(),
+      website,
+      jobUrl,
+      jobDescription,
+      refresh: Boolean(refresh)
+    });
+    return sendSuccess(res, intelligence);
+  } catch (error: any) {
+    return sendError(res, "COMPANY_INTELLIGENCE_FAILED", "Failed to retrieve company intelligence.", 500, error.message);
+  }
+});
+
+app.post("/api/company/refresh", async (req, res) => {
+  try {
+    const { companyName, website, jobUrl, jobDescription } = req.body;
+    if (!companyName || typeof companyName !== "string" || !companyName.trim()) {
+      return sendError(res, "INVALID_COMPANY_NAME", "companyName is required.", 400);
+    }
+    const intelligence = await globalCompanyIntelligenceStore.getIntelligence({
+      companyName: companyName.trim(),
+      website,
+      jobUrl,
+      jobDescription,
+      refresh: true
+    });
+    return sendSuccess(res, intelligence);
+  } catch (error: any) {
+    return sendError(res, "COMPANY_REFRESH_FAILED", "Failed to refresh company intelligence.", 500, error.message);
   }
 });
 
