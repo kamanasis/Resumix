@@ -1447,3 +1447,106 @@ export interface PredictiveAlignmentScore {
   disclaimer: string;
 }
 
+// ============================================================================
+// REAL-TIME RESUME INTELLIGENCE & LIVE ANALYSIS ENGINE
+// ============================================================================
+
+export type RecommendationCategory =
+  | "STRUCTURE"
+  | "CONTENT"
+  | "ATS"
+  | "KEYWORD"
+  | "CLARITY"
+  | "IMPACT"
+  | "EVIDENCE"
+  | "FORMATTING"
+  | "MISSING_INFORMATION"
+  | "TARGET_ALIGNMENT";
+
+export type RecommendationSeverity = "HIGH" | "MEDIUM" | "LOW";
+
+export type RecommendationStatus = "ACTIVE" | "APPLIED" | "DISMISSED" | "EDITED";
+
+export type LiveAnalysisState =
+  | "IDLE"
+  | "UPLOADING"
+  | "EXTRACTING"
+  | "VALIDATING"
+  | "UNDERSTANDING"
+  | "ANALYZING"
+  | "RECOMMENDING"
+  | "READY"
+  | "ERROR"
+  | "STALE";
+
+export interface StructuredRecommendation {
+  id: string;
+  category: RecommendationCategory;
+  severity: RecommendationSeverity;
+  title: string;
+  problem: string;
+  whyItMatters: string;
+  evidence: string;
+  recommendation: string;
+  safeAction: string;
+  whatWillNotInvent: string;
+  originalSnippet?: string;
+  suggestedSnippet?: string;
+  section: string;
+  requiresUserInput: boolean;
+  status: RecommendationStatus;
+  userEdits?: string;
+}
+
+export interface SectionAnalysisStatus {
+  name: string;
+  status: "ANALYZED" | "WARNING" | "MISSING";
+  itemCount: number;
+  details: string;
+}
+
+export interface StructuralMetrics {
+  extractedLength: number;
+  wordCount: number;
+  detectedSectionsCount: number;
+  experienceCount: number;
+  projectCount: number;
+  skillCount: number;
+  educationCount: number;
+  linkCount: number;
+  extractionQualityScore: number;
+  suspiciousIndicators: string[];
+}
+
+export interface RealtimeIntelligenceReport {
+  resumeId: string;
+  resumeVersion: number;
+  analysisVersion: number;
+  timestamp: string;
+  mode: "GENERAL" | "TARGETED";
+  targetContext?: {
+    company?: string;
+    role?: string;
+    jobDescription?: string;
+  };
+  overallHealthScore: number;
+  atsScore: number;
+  targetMatchScore: number | null;
+  contentQualityScore: number;
+  structureScore: number;
+  evidenceStrengthScore: number;
+  readabilityScore: number;
+  sections: SectionAnalysisStatus[];
+  recommendations: StructuredRecommendation[];
+  structuralMetrics: StructuralMetrics;
+  summary: {
+    highCount: number;
+    mediumCount: number;
+    lowCount: number;
+    totalCount: number;
+    appliedCount: number;
+    dismissedCount: number;
+  };
+}
+
+

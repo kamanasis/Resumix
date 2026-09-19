@@ -6,7 +6,9 @@ import {
   onSnapshot, 
   query, 
   where, 
-  orderBy 
+  orderBy,
+  doc,
+  updateDoc
 } from "firebase/firestore";
 import { ResumeFile, ResumeAnalysis } from "../types";
 import { 
@@ -34,6 +36,8 @@ import AnalysisHistory from "./AnalysisHistory";
 import FresherHub from "./FresherHub";
 import ApplicationTracker from "./ApplicationTracker";
 import ResumeHealthChecker from "./resume/ResumeHealthChecker";
+import ResumeIntelligenceView from "./resume/ResumeIntelligenceView";
+import { parseRawResumeText } from "../lib/resumeHealthEngine";
 
 interface DashboardProps {
   user: any;
@@ -696,49 +700,31 @@ service cloud.firestore {
             ) : activeTab === "health" ? (
               <div className="space-y-6 flex-1 flex flex-col">
                 {getSelectedResume() ? (
-                  <ResumeHealthChecker
-                    parsedResume={{
-                      id: getSelectedResume()?.id || "health-doc",
-                      userId: user.uid,
-                      resumeId: getSelectedResume()?.id || "unknown",
-                      createdAt: getSelectedResume()?.uploadedAt || new Date().toISOString(),
-                      contactInfo: {
-                        name: getSelectedResume()?.name ? getSelectedResume()!.name.replace(/\.[^/.]+$/, "") : "Candidate",
-                        email: (getSelectedResume()?.content.match(/[\w.-]+@[\w.-]+\.\w+/) || [])[0],
-                        phone: (getSelectedResume()?.content.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/) || [])[0]
-                      },
-                      summary: getSelectedResume()?.content.substring(0, 300) || "",
-                      skills: getSelectedResume()?.content.match(/(?:JavaScript|TypeScript|Python|React|Node|SQL|Java|AWS|Docker|Kubernetes|HTML|CSS|Git|C\+\+|C#)/gi) || [],
-                      experience: [
-                        {
-                          role: "Professional Role",
-                          company: "Company",
-                          duration: "Recent",
-                          description: getSelectedResume()?.content.substring(0, 600) || ""
-                        }
-                      ],
-                      projects: [],
-                      education: [
-                        {
-                          degree: "Degree",
-                          institution: "University"
-                        }
-                      ],
-                      achievements: [],
-                      certifications: [],
-                      languages: [],
-                      tools: [],
-                      frameworks: [],
-                      softSkills: [],
-                      atsKeywords: [],
-                      responsibilities: [],
-                      quantifiedMetrics: []
+                  <ResumeIntelligenceView
+                    parsedResume={parseRawResumeText(getSelectedResume()!.content)}
+                    rawText={getSelectedResume()!.content}
+                    resumeName={getSelectedResume()!.name || "Selected Resume"}
+                    resumeId={getSelectedResume()!.id}
+                    targetCompany={preloadedJobContext?.company}
+                    targetRole={preloadedJobContext?.role}
+                    jobDescription={preloadedJobContext?.jobDescription}
+                    onUpdateResumeText={async (updatedText) => {
+                      try {
+                        const resId = getSelectedResume()!.id;
+                        const ref = doc(db, "users", user.uid, "resumes", resId);
+                        await updateDoc(ref, {
+                          content: updatedText,
+                          size: updatedText.length,
+                          isUserEdited: true
+                        });
+                      } catch (err) {
+                        console.error("Failed to update resume in Firestore:", err);
+                      }
                     }}
-                    rawText={getSelectedResume()?.content || ""}
-                    resumeName={getSelectedResume()?.name || "Selected Resume"}
                     onProceedToTailor={() => setActiveTab("tailor")}
                   />
                 ) : (
+
                   <div className="text-center py-14 px-6 bg-white/50 backdrop-blur-md border border-white rounded-3xl shadow-sm space-y-4">
                     <div className="w-14 h-14 bg-cyan-100 text-cyan-600 rounded-2xl flex items-center justify-center mx-auto mb-2 border border-cyan-200">
                       <ShieldCheck className="w-7 h-7" />

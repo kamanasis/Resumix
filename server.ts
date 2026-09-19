@@ -45,6 +45,12 @@ import {
 import {
   evaluateResumeHealth
 } from "./src/lib/resumeHealthEngine";
+import {
+  analyzeResumeRealtime
+} from "./src/lib/resumeIntelligenceEngine";
+import {
+  extractTextFromPdf
+} from "./src/lib/pdfExtractor";
 import { 
   globalJobIngestionEngine,
   globalJobSnapshotStore,
@@ -1930,6 +1936,67 @@ app.post("/api/resume-health", (req, res) => {
     return sendError(res, "HEALTH_CHECK_FAILED", "Failed to evaluate resume health.", 500);
   }
 });
+
+app.post("/api/resume-intelligence", (req, res) => {
+  try {
+    const { 
+      parsedResume, 
+      resumeText, 
+      targetCompany, 
+      targetRole, 
+      jobDescription, 
+      resumeVersion, 
+      analysisVersion, 
+      appliedRecommendationIds, 
+      dismissedRecommendationIds 
+    } = req.body;
+
+    const input = parsedResume || resumeText;
+    if (!input) {
+      return sendError(res, "INVALID_INPUT", "parsedResume or resumeText is required for intelligence analysis.", 400);
+    }
+
+    const report = analyzeResumeRealtime(input, resumeText || "", {
+      targetCompany,
+      targetRole,
+      jobDescription,
+      resumeVersion,
+      analysisVersion,
+      appliedRecommendationIds,
+      dismissedRecommendationIds
+    });
+
+    return sendSuccess(res, report);
+  } catch (error: any) {
+    console.error("Error in /api/resume-intelligence:", error);
+    return sendError(res, "INTELLIGENCE_FAILED", "Failed to compute resume intelligence report.", 500, error.message);
+  }
+});
+
+app.post("/api/extract-pdf", async (req, res) => {
+  try {
+    const { base64Data } = req.body;
+    if (!base64Data || typeof base64Data !== "string") {
+      return sendError(res, "INVALID_INPUT", "base64Data string is required.", 400);
+    }
+
+    const buffer = Buffer.from(base64Data, "base64");
+    const result = await extractTextFromPdf(buffer);
+    if (!result.success) {
+      return sendError(res, "PDF_EXTRACTION_FAILED", result.error || "Failed to extract text from PDF document.", 422, {
+        isScanned: result.isScanned,
+        wordCount: result.wordCount,
+        charCount: result.charCount
+      });
+    }
+
+    return sendSuccess(res, result);
+  } catch (error: any) {
+    console.error("Error in /api/extract-pdf:", error);
+    return sendError(res, "EXTRACTION_ERROR", "Failed to process PDF file.", 500, error.message);
+  }
+});
+
 
 // ============================================================================
 // STAGE 6: UNIVERSAL JOB INGESTION API ROUTES

@@ -7,6 +7,7 @@ import { collection, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { validateExtraction } from "../lib/extractionValidator";
 import { extractTextFromDocx } from "../lib/docxExtractor";
+import { extractTextFromPdf } from "../lib/pdfExtractor";
 import { ExtractionQuality, ExtractionStatus } from "../types";
 
 interface ResumeUploadProps {
@@ -14,9 +15,22 @@ interface ResumeUploadProps {
   onUploadSuccess: () => void;
 }
 
+export type UploadProcessingStep = 
+  | "IDLE" 
+  | "UPLOADING" 
+  | "READING" 
+  | "EXTRACTING" 
+  | "UNDERSTANDING" 
+  | "ANALYZING" 
+  | "RECOMMENDING" 
+  | "READY" 
+  | "ERROR";
+
 export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadProps) {
   const [dragActive, setDragActive] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [processingStep, setProcessingStep] = useState<UploadProcessingStep>("IDLE");
+  const [activeFileInfo, setActiveFileInfo] = useState<{ name: string; size: number; type: string } | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isManualPasteOpen, setIsManualPasteOpen] = useState(false);
@@ -35,16 +49,35 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
   const [editContent, setEditContent] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Format bytes helper
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   // Parse file to text content
   const processFile = async (file: File) => {
+    // 1. Immediately register file info
+    setActiveFileInfo({
+      name: file.name,
+      size: file.size,
+      type: file.type || (file.name.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/pdf")
+    });
     setLoading(true);
+    setProcessingStep("UPLOADING");
     setError("");
     setSuccess("");
 
     try {
+      // Step 2: Reading document
+      setProcessingStep("READING");
+      await new Promise(r => setTimeout(r, 100)); // Small tick to allow UI to render status
+      
       let textContent = "";
 
       if (file.type === "text/plain" || file.name.endsWith(".txt") || file.name.endsWith(".md")) {
+        setProcessingStep("EXTRACTING");
         textContent = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = (e) => resolve((e.target?.result as string) || "");
@@ -52,6 +85,7 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
           reader.readAsText(file);
         });
       } else if (file.name.toLowerCase().endsWith(".docx") || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+        setProcessingStep("EXTRACTING");
         // Genuine OpenXML DOCX parsing via JSZip
         const buffer = await file.arrayBuffer();
         const extraction = await extractTextFromDocx(buffer);
@@ -59,8 +93,20 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
           throw new Error(extraction.error || "Failed to extract text from DOCX file. File may be corrupted or unreadable.");
         }
         textContent = extraction.text;
+      } else if (file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf") {
+        setProcessingStep("EXTRACTING");
+        const buffer = await file.arrayBuffer();
+        const pdfResult = await extractTextFromPdf(buffer);
+        if (!pdfResult.success) {
+          if (pdfResult.isScanned) {
+            throw new Error("This PDF appears to be a scanned image with no selectable text layer. Please upload a text-based document or paste your resume text.");
+          }
+          throw new Error(pdfResult.error || "Failed to extract selectable text from PDF document.");
+        }
+        textContent = pdfResult.text;
       } else {
-        // Binary files (PDF, DOC, etc.)
+        // Binary files with possible archive or text streams
+        setProcessingStep("EXTRACTING");
         const buffer = await file.arrayBuffer();
         const uint8 = new Uint8Array(buffer);
 
@@ -72,37 +118,39 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
           }
         }
 
-        if (!textContent) {
-          let extracted = "";
-          let chunk = "";
-          for (let i = 0; i < uint8.length; i++) {
-            const char = uint8[i];
-            if ((char >= 32 && char <= 126) || char === 10 || char === 13 || char === 9) {
-              chunk += String.fromCharCode(char);
-            } else {
-              if (chunk.trim().length > 2) {
-                extracted += chunk + " ";
-              }
-              chunk = "";
-            }
+        // Try PDF extractor if starts with %PDF-
+        if (!textContent && uint8.length >= 5 && String.fromCharCode(...uint8.slice(0, 5)) === "%PDF-") {
+          const pdfResult = await extractTextFromPdf(buffer);
+          if (pdfResult.success && pdfResult.text.trim().length > 0) {
+            textContent = pdfResult.text;
           }
-          if (chunk.trim().length > 2) {
-            extracted += chunk;
-          }
+        }
 
-          textContent = extracted
-            .replace(/\/[\w]+/g, "")
-            .replace(/\[\d+\]/g, "")
-            .replace(/\s+/g, " ")
-            .trim();
+        if (!textContent) {
+          throw new Error("Unsupported document format. Please upload a PDF, DOCX, or TXT file.");
         }
       }
+
+      // Step 3: Understanding resume structure & validating extraction
+      setProcessingStep("UNDERSTANDING");
+      await new Promise(r => setTimeout(r, 120));
 
       const { status, quality, userMessage } = validateExtraction(textContent, {
         name: file.name,
         size: file.size,
         type: file.type || "application/octet-stream"
       });
+
+      // Step 4: Analyzing & Recommending
+      if (status === "EXTRACTION_SUCCESS" || status === "EXTRACTION_PARTIAL") {
+        setProcessingStep("ANALYZING");
+        await new Promise(r => setTimeout(r, 120));
+        setProcessingStep("RECOMMENDING");
+        await new Promise(r => setTimeout(r, 100));
+        setProcessingStep("READY");
+      } else {
+        setProcessingStep("ERROR");
+      }
 
       setParsedFile({
         name: file.name,
@@ -119,11 +167,13 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
       }
     } catch (err: any) {
       console.error(err);
+      setProcessingStep("ERROR");
       setError(err.message || "Failed to parse file. You can paste the resume text manually.");
     } finally {
       setLoading(false);
     }
   };
+
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -261,89 +311,77 @@ export default function ResumeUpload({ userId, onUploadSuccess }: ResumeUploadPr
 
   return (
     <div className="w-full space-y-4">
-      {/* Notifications */}
+      {/* File Information Strip upon Drop/Selection */}
+      {activeFileInfo && (
+        <div className="p-3.5 bg-slate-900 text-white rounded-2xl border border-slate-700 flex items-center justify-between gap-3 text-xs animate-fadeIn">
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-7 h-7 bg-cyan-500/20 text-cyan-400 rounded-lg flex items-center justify-center shrink-0 border border-cyan-500/30">
+              <FileText className="w-4 h-4" />
+            </div>
+            <div className="truncate">
+              <span className="font-bold text-white block truncate">{activeFileInfo.name}</span>
+              <span className="text-[10px] text-slate-400 block">
+                {activeFileInfo.type.includes("pdf") ? "Portable Document (PDF)" : activeFileInfo.type.includes("word") || activeFileInfo.name.endsWith(".docx") ? "Word Document (DOCX)" : "Plain Text Document"} • {formatFileSize(activeFileInfo.size)}
+              </span>
+            </div>
+          </div>
+          {loading && (
+            <span className="px-2.5 py-1 bg-cyan-500/20 text-cyan-300 text-[10px] font-bold uppercase rounded-full border border-cyan-400/30 shrink-0 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+              Processing
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Extraction Failure / Scanned PDF Fail-Closed Card */}
       {error && (
-        <div className="p-4 bg-amber-50/90 backdrop-blur-md border border-amber-200 rounded-2xl text-amber-900 text-sm flex items-start gap-3 animate-fadeIn">
-          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <span className="font-semibold block">Extraction Notice</span>
-            <span className="text-xs text-amber-800">{error}</span>
-          </div>
-          <button
-            onClick={() => setError("")}
-            className="text-amber-600 hover:text-amber-800 text-xs font-bold"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {success && (
-        <div className="p-4 bg-emerald-50/90 backdrop-blur-md border border-emerald-200 rounded-2xl text-emerald-800 text-sm flex items-center gap-2 animate-fadeIn">
-          <CheckCircle className="w-5 h-5 text-emerald-500 shrink-0" />
-          <span>{success}</span>
-        </div>
-      )}
-
-      {/* Main Mode Toggle: Drag & Drop vs Direct Text Paste */}
-      {!parsedFile && !isManualPasteOpen && (
-        <div className="space-y-4">
-          <div
-            onDragEnter={handleDrag}
-            onDragOver={handleDrag}
-            onDragLeave={handleDrag}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`bg-white/70 backdrop-blur-xl border rounded-3xl p-8 text-center cursor-pointer hover:border-cyan-400 transition-all duration-300 flex flex-col items-center justify-center min-h-[200px] group relative ${
-              dragActive
-                ? "border-cyan-400 bg-cyan-50/40 shadow-[0_0_25px_rgba(6,182,212,0.15)]"
-                : "border-slate-200"
-            }`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept=".pdf,.txt,.md,.docx,.doc"
-              onChange={handleChange}
-            />
-            <div className="w-16 h-16 bg-cyan-100 rounded-2xl flex items-center justify-center mb-4 border border-cyan-200 group-hover:scale-105 transition-transform duration-300 shadow-[0_4px_12px_rgba(6,182,212,0.1)]">
-              <UploadCloud className="w-8 h-8 text-cyan-600" />
+        <div className="p-5 bg-rose-50/90 backdrop-blur-md border border-rose-200 rounded-3xl text-rose-900 text-xs space-y-3 animate-fadeIn">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center shrink-0 border border-rose-200">
+              <AlertTriangle className="w-5 h-5" />
             </div>
-            <h3 className="text-slate-800 font-display font-bold text-base mb-1">
-              Upload Resume File
-            </h3>
-            <p className="text-slate-500 text-xs mb-4 max-w-sm">
-              Drag and drop your PDF, TXT, or MD resume to extract contents
-            </p>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                className="bg-cyan-500 hover:bg-cyan-600 text-white font-semibold py-2.5 px-6 rounded-xl shadow-[0_4px_14px_rgba(6,182,212,0.25)] transition-all text-xs clickable-cursor"
-              >
-                Browse Files
-              </button>
+            <div className="flex-1 space-y-1">
+              <h4 className="font-display font-bold text-sm text-rose-950">
+                We couldn't reliably read this resume.
+              </h4>
+              <p className="text-rose-800 leading-relaxed text-xs">
+                {error}
+              </p>
             </div>
-            {loading && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-md rounded-3xl flex flex-col items-center justify-center z-10">
-                <div className="w-8 h-8 border-3 border-cyan-100 border-t-cyan-600 rounded-full animate-spin mb-2" />
-                <p className="text-cyan-700 text-xs font-semibold">Extracting & validating resume content...</p>
-              </div>
-            )}
           </div>
-
-          <div className="flex justify-center">
+          <div className="pt-2 border-t border-rose-200/80 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setIsManualPasteOpen(true)}
-              className="text-xs text-slate-500 hover:text-cyan-600 font-medium flex items-center gap-1.5 py-1 px-3 rounded-lg hover:bg-white transition-all clickable-cursor"
+              onClick={() => {
+                setError("");
+                setParsedFile(null);
+                setActiveFileInfo(null);
+                setProcessingStep("IDLE");
+                fileInputRef.current?.click();
+              }}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
             >
-              <ClipboardPaste className="w-3.5 h-3.5" />
-              <span>Or paste resume text manually</span>
+              Re-upload Document
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setError("");
+                setParsedFile(null);
+                setActiveFileInfo(null);
+                setProcessingStep("IDLE");
+                setIsManualPasteOpen(true);
+              }}
+              className="px-4 py-2 bg-white hover:bg-rose-100 text-rose-700 border border-rose-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+            >
+              Paste Resume Text
             </button>
           </div>
         </div>
       )}
+
+
 
       {/* Manual Paste Form */}
       {isManualPasteOpen && !parsedFile && (
