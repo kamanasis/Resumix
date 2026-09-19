@@ -38,6 +38,10 @@ import {
 import {
   validateDocxPackage
 } from "./src/lib/docxValidator";
+import {
+  parseMarkdownToResumeDocument,
+  createResumeDocument
+} from "./src/lib/resumeDocument";
 import { 
   globalJobIngestionEngine,
   globalJobSnapshotStore,
@@ -1755,6 +1759,13 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
     result.isFinalVersion = finality.isFinalVersion;
     result.finalityStatus = finality.finalityStatus;
 
+    // Stage 2: Unified Structured ResumeDocument Model
+    const tailoredDoc = parseMarkdownToResumeDocument(result.tailoredContent, beforeParsed);
+    if ((!tailoredDoc.header.name || tailoredDoc.header.name === "Candidate") && beforeParsed.contactInfo?.name) {
+      tailoredDoc.header.name = beforeParsed.contactInfo.name;
+    }
+    result.tailoredDocument = tailoredDoc;
+
     return sendSuccess(res, result);
   } catch (error: any) {
     console.error("Error in /api/tailor-resume-batch:", error);
@@ -1768,23 +1779,29 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
   }
 });
 
-// Stage 5 Pipeline: Server-Side DOCX & Print HTML Export Endpoints (0 AI Calls)
+// Stage 5 & Stage 2: Server-Side DOCX & Print HTML Export Endpoints (0 AI Calls)
 app.post("/api/export-resume-docx", async (req, res) => {
   try {
-    const { tailoredContent, parsedResume, targetCompany, targetRole } = req.body;
-    if (!tailoredContent || typeof tailoredContent !== "string") {
-      return sendError(res, "INVALID_EXPORT_DATA", "tailoredContent is required for export.", 400);
+    const { tailoredContent, resumeDocument, parsedResume, targetCompany, targetRole, templateId } = req.body;
+    const docOrMarkdown = resumeDocument || tailoredContent;
+    if (!docOrMarkdown) {
+      return sendError(res, "INVALID_EXPORT_DATA", "tailoredContent or resumeDocument is required for export.", 400);
     }
 
-    const readiness = validateExportReadiness({ tailoredContent, isValid: true, finalityStatus: "FINAL_OPTIMIZED" });
+    const readiness = validateExportReadiness({ 
+      tailoredContent: typeof docOrMarkdown === "string" ? docOrMarkdown : (docOrMarkdown.summary || "Valid Content"), 
+      isValid: true, 
+      finalityStatus: "FINAL_OPTIMIZED" 
+    });
     if (!readiness.canExport) {
       return sendError(res, "EXPORT_VALIDATION_FAILED", "Resume is not in valid exportable state.", 422, readiness.errors);
     }
 
-    const candidateName = parsedResume?.contactInfo?.name || "Candidate";
+    const candidateName = (typeof docOrMarkdown !== "string" ? docOrMarkdown.header?.name : undefined) || 
+      parsedResume?.contactInfo?.name || "Candidate";
     const filename = sanitizeExportFileName(candidateName, targetCompany, targetRole, "docx");
 
-    const docxBuffer = await generateDocxBuffer(tailoredContent, parsedResume);
+    const docxBuffer = await generateDocxBuffer(docOrMarkdown, templateId || parsedResume);
 
     // Validate package integrity before sending
     const validation = await validateDocxPackage(docxBuffer);
@@ -1808,12 +1825,13 @@ app.post("/api/export-resume-docx", async (req, res) => {
 
 app.post("/api/export-resume-html", (req, res) => {
   try {
-    const { tailoredContent, parsedResume } = req.body;
-    if (!tailoredContent || typeof tailoredContent !== "string") {
-      return sendError(res, "INVALID_EXPORT_DATA", "tailoredContent is required.", 400);
+    const { tailoredContent, resumeDocument, parsedResume, templateId } = req.body;
+    const docOrMarkdown = resumeDocument || tailoredContent;
+    if (!docOrMarkdown) {
+      return sendError(res, "INVALID_EXPORT_DATA", "tailoredContent or resumeDocument is required.", 400);
     }
 
-    const html = generatePrintableHtml(tailoredContent, parsedResume);
+    const html = generatePrintableHtml(docOrMarkdown, templateId || parsedResume);
     return sendSuccess(res, { html });
   } catch (error: any) {
     console.error("Error in /api/export-resume-html:", error);

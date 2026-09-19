@@ -107,6 +107,83 @@ export interface ParsedResume {
   parseStatus?: "PARSE_SUCCESS" | "PARSE_PARTIAL" | "PARSE_FAILED";
 }
 
+// ============================================================================
+// STAGE 2: PROFESSIONAL STRUCTURED RESUMEDOCUMENT MODEL & TEMPLATES
+// ============================================================================
+
+export type ResumeTemplateId = 
+  | "ats-classic" 
+  | "modern-pro" 
+  | "technical" 
+  | "minimal-exec" 
+  | "student-fresher";
+
+export interface ResumeHeader {
+  name: string;
+  professionalTitle?: string;
+  email?: string;
+  phone?: string;
+  location?: string;
+  linkedin?: string;
+  github?: string;
+  portfolio?: string;
+}
+
+export interface ResumeExperienceItem {
+  company: string;
+  title: string;
+  location?: string;
+  dates: string;
+  bullets: string[];
+}
+
+export interface ResumeProjectItem {
+  name: string;
+  technologies?: string[];
+  dates?: string;
+  bullets: string[];
+}
+
+export interface ResumeEducationItem {
+  degree: string;
+  institution: string;
+  location?: string;
+  dates?: string;
+  gpa?: string;
+  honors?: string;
+}
+
+export interface ResumeSkillCategory {
+  category: string;
+  items: string[];
+}
+
+export interface ResumeCertificationItem {
+  name: string;
+  issuer?: string;
+  date?: string;
+}
+
+export interface ResumeCustomSection {
+  title: string;
+  content: string[] | string;
+}
+
+export interface ResumeDocument {
+  header: ResumeHeader;
+  summary?: string;
+  experience?: ResumeExperienceItem[];
+  projects?: ResumeProjectItem[];
+  education?: ResumeEducationItem[];
+  skills?: ResumeSkillCategory[] | string[];
+  certifications?: (string | ResumeCertificationItem)[];
+  achievements?: string[];
+  awards?: string[];
+  publications?: string[];
+  otherSections?: ResumeCustomSection[];
+  templateId?: ResumeTemplateId;
+}
+
 // V1 Legacy Analysis
 export interface ResumeAnalysis {
   id: string;

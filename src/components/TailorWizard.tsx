@@ -12,7 +12,9 @@ import {
   RoleIntelligence,
   NormalizedRoleEntity,
   AdaptiveIntelligenceResponse,
-  AdaptiveRecommendation
+  AdaptiveRecommendation,
+  ResumeDocument,
+  ResumeTemplateId
 } from "../types";
 import { 
   Sparkles, CheckCircle, Download, Copy, Check, TrendingUp, TrendingDown,
@@ -27,8 +29,10 @@ import { motion, AnimatePresence } from "motion/react";
 import { collection, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { validateExportReadiness, verifyExportContentIntegrity } from "../lib/exportValidator";
-import { sanitizeExportFileName, generateDocxBlob, generatePrintableHtml, triggerDownload, DOCX_MIME_TYPE } from "../lib/exportEngine";
+import { sanitizeExportFileName, generateDocxBlob, generatePrintableHtml, triggerDownload, ensureResumeDocument, DOCX_MIME_TYPE } from "../lib/exportEngine";
 import { validateExtraction } from "../lib/extractionValidator";
+import { ResumeDocumentPreview } from "./resume/ResumeDocumentPreview";
+import { OptimizationInsightsPanel } from "./resume/OptimizationInsightsPanel";
 
 interface TailorWizardProps {
   userId: string;
@@ -187,10 +191,29 @@ export default function TailorWizard({
 
   // Checkboxes & Batch Tailoring states
   const [selectedItems, setSelectedItems] = useState<MissingItem[]>([]);
-  const [batchResult, setBatchResult] = useState<{ tailoredContent: string; explanations: any[] } | null>(null);
+  const [batchResult, setBatchResult] = useState<{ 
+    tailoredContent: string; 
+    explanations: any[];
+    tailoredDocument?: ResumeDocument;
+    changes?: any[];
+    scoreComparison?: any;
+    validation?: any;
+    finalityStatus?: string;
+  } | null>(null);
+  const [activeTemplate, setActiveTemplate] = useState<ResumeTemplateId>("ats-classic");
   const [isBatchTailoring, setIsBatchTailoring] = useState(false);
   const [dashboardTab, setDashboardTab] = useState<"checklist" | "tailored" | "intelligence">("checklist");
   const [copiedText, setCopiedText] = useState(false);
+
+  // Unified structured ResumeDocument driving Preview, PDF, DOCX, and TXT
+  const currentResumeDoc: ResumeDocument = React.useMemo(() => {
+    if (batchResult?.tailoredDocument) {
+      return { ...batchResult.tailoredDocument, templateId: activeTemplate };
+    }
+    const content = batchResult?.tailoredContent || selectedResume?.content || "";
+    const doc = ensureResumeDocument(content, parsedResume);
+    return { ...doc, templateId: activeTemplate };
+  }, [batchResult, selectedResume, parsedResume, activeTemplate]);
 
   // Dynamic Gemini Key Configuration State
   const [newApiKey, setNewApiKey] = useState("");
@@ -2233,97 +2256,33 @@ export default function TailorWizard({
           );
         })()}
 
-            {/* EXPORT ACTION BUTTONS */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-200 shadow-sm">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-700">Verified Formats:</span>
-                <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono font-medium">PDF (ATS Print)</span>
-                <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono font-medium">DOCX (Native)</span>
-                <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono font-medium">Plain Text</span>
-              </div>
+            {/* STAGE 2: SEPARATE OPTIMIZATION INSIGHTS & FACTUAL AUDIT PANEL */}
+            <OptimizationInsightsPanel
+              scoreComparison={(batchResult as any)?.scoreComparison ? {
+                beforeScore: (batchResult as any).scoreComparison.beforeAtsScore ?? 41,
+                afterScore: (batchResult as any).scoreComparison.afterAtsScore ?? 68,
+                delta: (batchResult as any).scoreComparison.atsScoreDelta ?? 27
+              } : null}
+              targetMatchComparison={{
+                originalMatch: (batchResult as any)?.scoreComparison?.beforeTargetMatch ?? 26,
+                tailoredMatch: (batchResult as any)?.scoreComparison?.afterTargetMatch ?? 61
+              }}
+              changes={batchResult?.changes || []}
+              explanations={batchResult?.explanations || []}
+              unmatchedRequirements={frozenProfile?.structuredRequirements?.filter(r => r.status === "MISSING" || r.status === "UNVERIFIED") || []}
+            />
 
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => handleExport("pdf")}
-                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
-                  title="Print / Save as clean ATS PDF"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print PDF</span>
-                </button>
-
-                <button 
-                  onClick={() => handleExport("docx")}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
-                  title="Export native Microsoft Word document"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>Export DOCX</span>
-                </button>
-
-                <button 
-                  onClick={() => copyToClipboard(batchResult?.tailoredContent || selectedResume?.content || "")}
-                  className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
-                  title="Copy full text to clipboard"
-                >
-                  {copiedText ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                      <span className="text-emerald-700">Copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Copy Text</span>
-                    </>
-                  )}
-                </button>
-
-                <button 
-                  onClick={handleTrackApplication}
-                  className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
-                  title="Record this tailored submission in Application Tracker"
-                >
-                  {trackedSuccess ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-400">Tracked</span>
-                    </>
-                  ) : (
-                    <>
-                      <Briefcase className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Track Application</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* AUDIT LOG & EXPLANATIONS */}
-            {batchResult.explanations && batchResult.explanations.length > 0 && (
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
-                <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-1.5">
-                  <Cpu className="w-4 h-4 text-cyan-600" /> Tailoring Action Audit Trail
-                </h5>
-                <div className="space-y-2">
-                  {batchResult.explanations.map((exp: any, idx: number) => (
-                    <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 text-xs space-y-1">
-                      <div className="flex justify-between">
-                        <strong className="text-slate-800">{exp.requirement}</strong>
-                        <span className="text-cyan-700 font-semibold">{exp.actionTaken}</span>
-                      </div>
-                      <div className="flex gap-4 text-[11px]">
-                        <span className="text-green-600">ATS Benefit: {exp.atsBenefit}</span>
-                        <span className="text-slate-400">Recruiter: {exp.recruiterBenefit}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 font-mono text-xs overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed text-slate-700">
-              {batchResult?.tailoredContent}
+            {/* STAGE 2: PROFESSIONAL REAL RESUME DOCUMENT PREVIEW */}
+            <div className="w-full">
+              <ResumeDocumentPreview
+                document={currentResumeDoc}
+                targetCompany={targetCompany}
+                targetRole={targetRole}
+                activeTemplate={activeTemplate}
+                onTemplateChange={setActiveTemplate}
+                onTrackApplication={handleTrackApplication}
+                isTracked={trackedSuccess}
+              />
             </div>
 
             <div className="flex justify-end gap-3 pt-4">
