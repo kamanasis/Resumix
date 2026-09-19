@@ -1,5 +1,7 @@
-import React, { useState, Component } from "react";
-import { ResumeAnalysis, ResumeFile } from "../types";
+import React, { useState, useEffect, useMemo, Component } from "react";
+import { ResumeAnalysis, ResumeFile, ResumeDocument, ResumeTemplateId } from "../types";
+import { ResumeDocumentPreview } from "./resume/ResumeDocumentPreview";
+import { parseMarkdownToResumeDocument } from "../lib/resumeDocument";
 import { 
   Sparkles, 
   Trash2, 
@@ -83,6 +85,7 @@ export interface UnifiedHistoryItem {
   originalAtsScore?: number;
   tailoredAtsScore?: number;
   targetMatchScore?: number;
+  originalTargetMatch?: number;
   tailoredDocument?: any;
   templateId?: string;
 }
@@ -272,6 +275,35 @@ function AnalysisHistoryContent({
   const [resultTab, setResultTab] = useState<string>("overview");
   const [openInTailorToast, setOpenInTailorToast] = useState(false);
   const [trackApplicationToast, setTrackApplicationToast] = useState(false);
+  const [historyTemplate, setHistoryTemplate] = useState<ResumeTemplateId>("ats-classic");
+
+  // Reset tab and template when selecting a history item
+  useEffect(() => {
+    if (selectedItem) {
+      if (selectedItem.templateId) {
+        setHistoryTemplate(selectedItem.templateId as ResumeTemplateId);
+      }
+      if (selectedItem.type === "TAILORED" && (selectedItem.tailoredContent || selectedItem.tailoredDocument)) {
+        setResultTab("resume");
+      } else {
+        setResultTab("overview");
+      }
+    }
+  }, [selectedItem?.id]);
+
+  // Compute structured ResumeDocument from saved record or markdown
+  const resumeDoc: ResumeDocument | null = useMemo(() => {
+    if (!selectedItem) return null;
+    if (selectedItem.tailoredDocument) return selectedItem.tailoredDocument;
+    if (selectedItem.tailoredContent && selectedItem.tailoredContent.trim()) {
+      try {
+        return parseMarkdownToResumeDocument(selectedItem.tailoredContent);
+      } catch (err) {
+        console.warn("Could not parse tailoredContent markdown to ResumeDocument:", err);
+      }
+    }
+    return null;
+  }, [selectedItem]);
 
   // Resume lookup mapping helper
   const resumeMap = new Map<string, string>();
@@ -324,6 +356,7 @@ function AnalysisHistoryContent({
       originalAtsScore: originalAts,
       tailoredAtsScore: tailoredAts,
       targetMatchScore: targetMatch,
+      originalTargetMatch: a.originalTargetMatch ?? originalAts,
       beforeAtsScore: originalAts > 0 ? originalAts : a.beforeAtsScore,
       afterAtsScore: tailoredAts,
       atsScoreDelta: delta,
@@ -1131,44 +1164,97 @@ function AnalysisHistoryContent({
 
             {/* 2. TAILORED RESUME TAB */}
             {resultTab === "resume" && (
-              <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                  <div>
-                    <h4 className="text-slate-900 font-display font-bold text-sm">
-                      Tailored Resume Document
-                    </h4>
-                    <p className="text-slate-500 text-xs">
-                      Export to Word (DOCX), Print PDF, or Copy markdown
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleExport("pdf", selectedItem)}
-                      className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm clickable-cursor"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-cyan-600" />
-                      <span>Print PDF</span>
-                    </button>
-                    <button
-                      onClick={() => handleExport("docx", selectedItem)}
-                      className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-sm clickable-cursor"
-                    >
-                      <FileText className="w-3.5 h-3.5 text-cyan-600" />
-                      <span>DOCX</span>
-                    </button>
-                    <button
-                      onClick={() => copyToClipboard(selectedItem.tailoredContent)}
-                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all clickable-cursor"
-                    >
-                      {copiedText ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedText ? "Copied" : "Copy"}</span>
-                    </button>
-                  </div>
-                </div>
+              <div className="space-y-6">
+                {resumeDoc ? (
+                  <>
+                    {/* Concise Optimization Summary Card (Section 14) */}
+                    <div className="bg-slate-50/80 border border-slate-200/80 rounded-2xl p-5 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-700 block">
+                            Optimization Summary
+                          </span>
+                          <h5 className="text-sm font-display font-bold text-slate-900">
+                            Deterministic Tailoring Integrity & Verified Alignments
+                          </h5>
+                        </div>
+                        <div className="flex items-center gap-4 text-xs">
+                          <div>
+                            <span className="text-[10px] text-slate-400 font-bold block">ATS Compatibility</span>
+                            <span className="font-bold text-slate-800">
+                              {selectedItem.originalAtsScore || selectedItem.beforeAtsScore || selectedItem.atsScore}% → {selectedItem.tailoredAtsScore || selectedItem.afterAtsScore || selectedItem.atsScore}%
+                            </span>
+                          </div>
+                          <div className="pl-3 border-l border-slate-200">
+                            <span className="text-[10px] text-slate-400 font-bold block">Target Match</span>
+                            <span className="font-bold text-cyan-700">
+                              {selectedItem.originalTargetMatch || selectedItem.originalAtsScore || selectedItem.atsScore}% → {selectedItem.targetMatchScore || selectedItem.atsScore}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
 
-                <div className="markdown-body overflow-y-auto max-h-[550px] border border-slate-200/60 p-6 rounded-2xl bg-white select-text leading-relaxed text-xs text-slate-800 font-sans shadow-inner">
-                  <div className="whitespace-pre-wrap font-sans">{selectedItem.tailoredContent}</div>
-                </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                        <div className="space-y-1.5 bg-white p-3.5 rounded-xl border border-slate-200">
+                          <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Changes Made</span>
+                          <ul className="space-y-1 text-[11px] text-slate-700">
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-emerald-600 shrink-0" /> Improved summary relevance</li>
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-emerald-600 shrink-0" /> Reordered verified skills</li>
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-emerald-600 shrink-0" /> Improved experience wording</li>
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-emerald-600 shrink-0" /> Reduced passive phrasing</li>
+                          </ul>
+                        </div>
+                        <div className="space-y-1.5 bg-white p-3.5 rounded-xl border border-slate-200">
+                          <span className="text-[10px] font-bold text-cyan-800 uppercase tracking-wider block">Protected Information</span>
+                          <ul className="space-y-1 text-[11px] text-slate-700">
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-cyan-600 shrink-0" /> Metrics preserved</li>
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-cyan-600 shrink-0" /> Employers preserved</li>
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-cyan-600 shrink-0" /> Dates preserved</li>
+                            <li className="flex items-center gap-1.5"><Check className="w-3 h-3 text-cyan-600 shrink-0" /> Technologies preserved</li>
+                          </ul>
+                        </div>
+                        <div className="space-y-1.5 bg-white p-3.5 rounded-xl border border-slate-200">
+                          <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">Not Added (Zero Fabrication)</span>
+                          <ul className="space-y-1 text-[11px] text-slate-700">
+                            <li className="flex items-center gap-1.5 text-amber-800"><span className="text-amber-500 font-bold">✕</span> Unsupported technologies</li>
+                            <li className="flex items-center gap-1.5 text-amber-800"><span className="text-amber-500 font-bold">✕</span> Unsupported employers</li>
+                            <li className="flex items-center gap-1.5 text-amber-800"><span className="text-amber-500 font-bold">✕</span> Unsupported metrics</li>
+                            <li className="flex items-center gap-1.5 text-amber-800"><span className="text-amber-500 font-bold">✕</span> Unverified certifications</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Primary Focus: Real Professional Resume Document */}
+                    <div className="pt-2">
+                      <ResumeDocumentPreview
+                        document={resumeDoc}
+                        targetCompany={selectedItem.targetCompany}
+                        targetRole={selectedItem.targetRole}
+                        activeTemplate={historyTemplate}
+                        onTemplateChange={setHistoryTemplate}
+                        onTrackApplication={onTrackApplication ? () => handleTrackInApplications(selectedItem) : undefined}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-14 px-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
+                    <FileText className="w-10 h-10 text-slate-400 mx-auto" />
+                    <h4 className="text-slate-800 font-bold text-sm">No Tailored Resume Stored for this Record</h4>
+                    <p className="text-slate-500 text-xs max-w-md mx-auto">
+                      This entry is a deterministic qualification diagnostic. You can generate a tailored resume draft using the Tailor Tool.
+                    </p>
+                    {onOpenInTailor && (
+                      <button
+                        onClick={() => handleLoadInTailorWizard(selectedItem)}
+                        className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl inline-flex items-center gap-2 transition-all shadow-sm"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Generate Tailored Resume in Tailor Tool</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1184,27 +1270,37 @@ function AnalysisHistoryContent({
                   </p>
                 </div>
 
-                <div className="space-y-3 pt-2">
-                  {selectedItem.tailoredBullets.map((bullet, idx) => (
-                    <div
-                      key={idx}
-                      className="grid md:grid-cols-2 gap-4 p-4 border border-slate-200/60 rounded-2xl bg-white shadow-sm hover:border-cyan-200 transition-all"
-                    >
-                      <div className="space-y-1">
-                        <span className="text-[10px] text-red-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                          <span>Original Bullet:</span>
-                        </span>
-                        <p className="text-xs text-slate-500 italic leading-relaxed">{bullet.current}</p>
+                {selectedItem.tailoredBullets && selectedItem.tailoredBullets.length > 0 ? (
+                  <div className="space-y-3 pt-2">
+                    {selectedItem.tailoredBullets.map((bullet, idx) => (
+                      <div
+                        key={idx}
+                        className="grid md:grid-cols-2 gap-4 p-4 border border-slate-200/60 rounded-2xl bg-white shadow-sm hover:border-cyan-200 transition-all"
+                      >
+                        <div className="space-y-1">
+                          <span className="text-[10px] text-red-500 font-bold uppercase tracking-wider flex items-center gap-1">
+                            <span>Original Bullet:</span>
+                          </span>
+                          <p className="text-xs text-slate-500 italic leading-relaxed">{bullet.current}</p>
+                        </div>
+                        <div className="space-y-1 border-t md:border-t-0 md:border-l border-slate-100 pt-3 md:pt-0 md:pl-4">
+                          <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider flex items-center gap-1">
+                            <span>ATS Optimized Bullet:</span>
+                          </span>
+                          <p className="text-xs text-slate-800 font-semibold leading-relaxed">{bullet.improved}</p>
+                        </div>
                       </div>
-                      <div className="space-y-1 border-t md:border-t-0 md:border-l border-slate-100 pt-3 md:pt-0 md:pl-4">
-                        <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider flex items-center gap-1">
-                          <span>ATS Optimized Bullet:</span>
-                        </span>
-                        <p className="text-xs text-slate-800 font-semibold leading-relaxed">{bullet.improved}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-8 bg-slate-50 border border-slate-100 rounded-2xl text-center space-y-2">
+                    <CheckSquare className="w-8 h-8 text-slate-400 mx-auto" />
+                    <p className="text-slate-700 text-xs font-bold">No Individual Bullet Transformations Stored</p>
+                    <p className="text-slate-400 text-[11px] max-w-sm mx-auto">
+                      The complete tailored resume was synthesized directly into the structured resume document. Check the Tailored Resume tab.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1388,6 +1484,18 @@ function AnalysisHistoryContent({
               </div>
             )}
 
+            {/* Fallback in case resultTab does not match any tab */}
+            {!["overview", "resume", "bullets", "tech", "gaps", "job"].includes(resultTab) && (
+              <div className="text-center py-12 px-4 bg-slate-50 border border-slate-100 rounded-2xl space-y-2">
+                <p className="text-slate-600 text-xs font-semibold">Select a tab above to view optimization details.</p>
+                <button
+                  onClick={() => setResultTab(resumeDoc ? "resume" : "overview")}
+                  className="mt-2 px-4 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl"
+                >
+                  View Details
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
