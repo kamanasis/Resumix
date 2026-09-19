@@ -1223,7 +1223,12 @@ export type LearningEventType =
   | "TAILORING_ACCEPTED"
   | "TAILORING_REJECTED"
   | "TAILORING_EDITED"
+  | "RECOMMENDATION_SHOWN"
   | "RECOMMENDATION_ACCEPTED"
+  | "RECOMMENDATION_DISMISSED"
+  | "RECOMMENDATION_EDITED"
+  | "RECOMMENDATION_APPLIED"
+  | "USER_PROVIDED_EVIDENCE"
   | "RECOMMENDATION_REJECTED"
   | "KEYWORD_ACCEPTED"
   | "KEYWORD_REJECTED"
@@ -1231,6 +1236,7 @@ export type LearningEventType =
   | "EXPORT_PERFORMED"
   | "USER_FEEDBACK_SUBMITTED"
   | "OUTCOME_RECORDED";
+
 
 export interface LearningEvent {
   eventId: string;
@@ -1500,8 +1506,11 @@ export interface StructuredRecommendation {
 
 export interface SectionAnalysisStatus {
   name: string;
-  status: "ANALYZED" | "WARNING" | "MISSING";
+  status: "ANALYZED" | "WARNING" | "MISSING" | "NEEDS_IMPROVEMENT" | "EMPTY";
   itemCount: number;
+  entriesCount: number;
+  issuesCount: number;
+  recommendations: StructuredRecommendation[];
   details: string;
 }
 

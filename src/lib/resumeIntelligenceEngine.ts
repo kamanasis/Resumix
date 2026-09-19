@@ -81,23 +81,26 @@ export function analyzeResumeRealtime(
   };
 
   // 2. Sections Status Breakdown
-  const sections: SectionAnalysisStatus[] = [
+  const rawSections: Omit<SectionAnalysisStatus, "issuesCount" | "recommendations">[] = [
     {
       name: "Contact Information",
       status: parsed.contactInfo?.email && parsed.contactInfo?.phone ? "ANALYZED" : "WARNING",
       itemCount: (parsed.contactInfo?.email ? 1 : 0) + (parsed.contactInfo?.phone ? 1 : 0) + (parsed.contactInfo?.location ? 1 : 0),
+      entriesCount: (parsed.contactInfo?.email ? 1 : 0) + (parsed.contactInfo?.phone ? 1 : 0) + (parsed.contactInfo?.location ? 1 : 0),
       details: parsed.contactInfo?.email ? "Direct recruiter contact channels detected." : "Missing email or phone number in contact header."
     },
     {
       name: "Professional Summary",
       status: parsed.summary && parsed.summary.trim().length > 30 ? "ANALYZED" : "MISSING",
       itemCount: parsed.summary ? 1 : 0,
+      entriesCount: parsed.summary ? 1 : 0,
       details: parsed.summary ? `${parsed.summary.split(/\s+/).length} words establishing candidate profile.` : "No executive or professional summary section detected."
     },
     {
       name: "Work Experience",
       status: structuralMetrics.experienceCount > 0 ? "ANALYZED" : "WARNING",
       itemCount: structuralMetrics.experienceCount,
+      entriesCount: structuralMetrics.experienceCount,
       details: structuralMetrics.experienceCount > 0 
         ? `${structuralMetrics.experienceCount} professional roles with verified duration and company markers.`
         : "No formal employment history detected (recommended for mid/senior roles)."
@@ -106,6 +109,7 @@ export function analyzeResumeRealtime(
       name: "Projects & Portfolio",
       status: structuralMetrics.projectCount > 0 ? "ANALYZED" : (structuralMetrics.experienceCount > 0 ? "ANALYZED" : "MISSING"),
       itemCount: structuralMetrics.projectCount,
+      entriesCount: structuralMetrics.projectCount,
       details: structuralMetrics.projectCount > 0 
         ? `${structuralMetrics.projectCount} demonstrated projects showing hands-on implementation.`
         : "No dedicated projects section detected."
@@ -114,12 +118,14 @@ export function analyzeResumeRealtime(
       name: "Technical Skills",
       status: structuralMetrics.skillCount >= 3 ? "ANALYZED" : "WARNING",
       itemCount: structuralMetrics.skillCount,
+      entriesCount: structuralMetrics.skillCount,
       details: `${structuralMetrics.skillCount} distinct technical skills parsed with evidence mapping.`
     },
     {
       name: "Education",
       status: structuralMetrics.educationCount > 0 ? "ANALYZED" : "WARNING",
       itemCount: structuralMetrics.educationCount,
+      entriesCount: structuralMetrics.educationCount,
       details: structuralMetrics.educationCount > 0 
         ? `${structuralMetrics.educationCount} academic degrees/institutions identified.`
         : "No academic qualifications or university degrees found."
@@ -374,6 +380,24 @@ export function analyzeResumeRealtime(
       });
     }
   }
+
+  // Assemble final sections array with matching recommendations and issue counts
+  const sections: SectionAnalysisStatus[] = rawSections.map(raw => {
+    const sectionRecs = recommendations.filter(r => 
+      r.section.toLowerCase().includes(raw.name.toLowerCase()) ||
+      (raw.name.includes("Summary") && r.section.toLowerCase().includes("summary")) ||
+      (raw.name.includes("Experience") && r.section.toLowerCase().includes("experience")) ||
+      (raw.name.includes("Project") && r.section.toLowerCase().includes("project")) ||
+      (raw.name.includes("Skill") && r.section.toLowerCase().includes("skill")) ||
+      (raw.name.includes("Education") && r.section.toLowerCase().includes("education"))
+    );
+    return {
+      ...raw,
+      issuesCount: sectionRecs.length,
+      recommendations: sectionRecs,
+      status: sectionRecs.length > 0 && raw.status === "ANALYZED" ? "NEEDS_IMPROVEMENT" : raw.status
+    };
+  });
 
   // Calculate summary counts
   const highCount = recommendations.filter(r => r.severity === "HIGH").length;

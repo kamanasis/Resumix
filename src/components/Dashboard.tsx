@@ -701,6 +701,7 @@ service cloud.firestore {
               <div className="space-y-6 flex-1 flex flex-col">
                 {getSelectedResume() ? (
                   <ResumeIntelligenceView
+                    userId={user.uid}
                     parsedResume={parseRawResumeText(getSelectedResume()!.content)}
                     rawText={getSelectedResume()!.content}
                     resumeName={getSelectedResume()!.name || "Selected Resume"}
