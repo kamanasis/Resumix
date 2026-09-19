@@ -467,6 +467,10 @@ export interface TailorRecommendation {
   exampleBetterVersion?: string;
   expectedImpact?: string;
   evidenceNeeded?: string;
+  whatIsWrong?: string;
+  whatCanSafelyChange?: string;
+  missingInformation?: string;
+  whatWillNotInvent?: string;
 }
 
 // Stage 4 Types: Evidence-Based Tailoring & Provenance

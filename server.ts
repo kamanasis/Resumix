@@ -42,6 +42,9 @@ import {
   parseMarkdownToResumeDocument,
   createResumeDocument
 } from "./src/lib/resumeDocument";
+import {
+  evaluateResumeHealth
+} from "./src/lib/resumeHealthEngine";
 import { 
   globalJobIngestionEngine,
   globalJobSnapshotStore,
@@ -1570,6 +1573,12 @@ CRITICAL ANTI-FABRICATION RULES:
       result.evidenceNeeded = `Project, coursework, internship, or work experience demonstrating ${itemTitle}.`;
     }
 
+    // Explicitly expose standard 5-question answers
+    result.whatIsWrong = result.whatResumixFound;
+    result.whatCanSafelyChange = result.whatYouCanSafelyChange;
+    result.missingInformation = result.evidenceNeeded;
+    result.whatWillNotInvent = result.whatYouShouldNotChange;
+
     if (!validateTailorGap(result)) {
       return sendError(res, "VALIDATION_ERROR", "The generated suggestion failed structural verification and was rejected.", 422);
     }
@@ -1749,22 +1758,53 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
       );
     }
 
-    // 4. Compute After-Tailoring Stage 3 Evaluation
-    const afterEval = evaluateResumeAgainstRequirements(beforeParsed, structuredReqs, result.tailoredContent);
-    const scoreComparison = compareScores(beforeEval, afterEval);
-    const finality = evaluateFinality(validation, scoreComparison, extractionCheck.status);
-
-    result.scoreComparison = scoreComparison;
-    result.validation = validation;
-    result.isFinalVersion = finality.isFinalVersion;
-    result.finalityStatus = finality.finalityStatus;
-
     // Stage 2: Unified Structured ResumeDocument Model
     const tailoredDoc = parseMarkdownToResumeDocument(result.tailoredContent, beforeParsed);
     if ((!tailoredDoc.header.name || tailoredDoc.header.name === "Candidate") && beforeParsed.contactInfo?.name) {
       tailoredDoc.header.name = beforeParsed.contactInfo.name;
     }
     result.tailoredDocument = tailoredDoc;
+
+    // Stage 3: Construct afterParsed reflecting tailored document enhancements
+    const extractedSkills = Array.isArray(tailoredDoc.skills)
+      ? (typeof tailoredDoc.skills[0] === "string"
+          ? (tailoredDoc.skills as string[])
+          : (tailoredDoc.skills as any[]).flatMap((c: any) => c.items || []))
+      : [];
+
+    const afterParsed: ParsedResume = {
+      ...beforeParsed,
+      skills: Array.from(new Set([...(beforeParsed.skills || []), ...extractedSkills])),
+      experience: tailoredDoc.experience ? tailoredDoc.experience.map(e => ({
+        role: e.title,
+        company: e.company,
+        duration: e.dates,
+        location: e.location,
+        description: (e.bullets || []).join(" ")
+      })) : beforeParsed.experience,
+      projects: tailoredDoc.projects ? tailoredDoc.projects.map(p => ({
+        title: p.name,
+        technologies: p.technologies || [],
+        description: (p.bullets || []).join(" ")
+      })) : beforeParsed.projects,
+      summary: tailoredDoc.summary || beforeParsed.summary
+    };
+
+    // 4. Compute After-Tailoring Stage 3 Deterministic Evaluation
+    const afterEval = evaluateResumeAgainstRequirements(afterParsed, structuredReqs, result.tailoredContent);
+    const scoreComparison = compareScores(beforeEval, afterEval);
+    const finality = evaluateFinality(validation, scoreComparison, extractionCheck.status);
+
+    result.scoreComparison = {
+      ...scoreComparison,
+      originalAtsScore: scoreComparison.beforeAtsScore,
+      tailoredAtsScore: scoreComparison.afterAtsScore,
+      targetMatchScore: (afterEval as any).scores?.atsCompatibility ?? (afterEval as any).overallScore ?? scoreComparison.afterTargetMatch ?? scoreComparison.afterAtsScore,
+      originalTargetMatch: (beforeEval as any).scores?.atsCompatibility ?? (beforeEval as any).overallScore ?? scoreComparison.beforeTargetMatch ?? scoreComparison.beforeAtsScore,
+    };
+    result.validation = validation;
+    result.isFinalVersion = finality.isFinalVersion;
+    result.finalityStatus = finality.finalityStatus;
 
     return sendSuccess(res, result);
   } catch (error: any) {
@@ -1776,6 +1816,43 @@ CRITICAL TRUTH & FACT PRESERVATION RULES:
       return sendError(res, classified.code, classified.message, classified.httpStatus);
     }
     return sendError(res, "BATCH_TAILOR_ERROR", "Failed to perform batch tailoring.", 500, error.message || String(error));
+  }
+});
+
+// Stage 3: Deterministic Resume Health & ATS Readiness Evaluation
+app.post("/api/resume-health", async (req, res) => {
+  try {
+    const { parsedResume, resumeText } = req.body;
+    if (!parsedResume && !resumeText) {
+      return sendError(res, "MISSING_RESUME_DATA", "parsedResume or resumeText is required for health evaluation.", 400);
+    }
+
+    const defaultParsed: ParsedResume = parsedResume || {
+      id: "health-eval",
+      userId: "anonymous",
+      resumeId: "unknown",
+      createdAt: new Date().toISOString(),
+      summary: "",
+      skills: [],
+      projects: [],
+      experience: [],
+      education: [],
+      achievements: [],
+      certifications: [],
+      languages: [],
+      tools: [],
+      frameworks: [],
+      softSkills: [],
+      atsKeywords: [],
+      responsibilities: [],
+      quantifiedMetrics: []
+    };
+
+    const report = evaluateResumeHealth(defaultParsed, resumeText || "");
+    return sendSuccess(res, report);
+  } catch (err: any) {
+    console.error("Error in /api/resume-health:", err);
+    return sendError(res, "HEALTH_EVAL_ERROR", "Failed to evaluate resume health.", 500, err.message || String(err));
   }
 });
 
@@ -1836,6 +1913,21 @@ app.post("/api/export-resume-html", (req, res) => {
   } catch (error: any) {
     console.error("Error in /api/export-resume-html:", error);
     return sendError(res, "PDF_GENERATION_FAILED", "Failed to render printable document.", 500);
+  }
+});
+
+app.post("/api/resume-health", (req, res) => {
+  try {
+    const { parsedResume, resumeText, jobDescription } = req.body;
+    const input = parsedResume || resumeText;
+    if (!input) {
+      return sendError(res, "INVALID_INPUT", "parsedResume or resumeText is required.", 400);
+    }
+    const report = evaluateResumeHealth(input, resumeText || jobDescription || "");
+    return sendSuccess(res, report);
+  } catch (error: any) {
+    console.error("Error in /api/resume-health:", error);
+    return sendError(res, "HEALTH_CHECK_FAILED", "Failed to evaluate resume health.", 500);
   }
 });
 

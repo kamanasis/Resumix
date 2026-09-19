@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, Component } from "react";
 import { ResumeAnalysis, ResumeFile } from "../types";
 import { 
   Sparkles, 
@@ -80,14 +80,21 @@ export interface UnifiedHistoryItem {
   hiringTrends?: string;
   projectExpectations?: string;
   recommendations?: string;
+  originalAtsScore?: number;
+  tailoredAtsScore?: number;
+  targetMatchScore?: number;
+  tailoredDocument?: any;
+  templateId?: string;
 }
 
-interface AnalysisHistoryProps {
+export interface AnalysisHistoryProps {
   analyses: ResumeAnalysis[];
   gapReports?: any[];
   resumes?: ResumeFile[];
   userId: string;
   selectedResumeId?: string | null;
+  isLoading?: boolean;
+  error?: string | null;
   onSelectResume?: (id: string) => void;
   onRefresh?: () => void;
   onOpenInTailor?: (context: {
@@ -101,6 +108,65 @@ interface AnalysisHistoryProps {
     role?: string;
     resumeId?: string;
   }) => void;
+}
+
+export interface AnalysisHistoryErrorBoundaryProps {
+  children: React.ReactNode;
+  onRetry?: () => void;
+}
+
+export interface AnalysisHistoryErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class AnalysisHistoryErrorBoundary extends Component<
+  AnalysisHistoryErrorBoundaryProps,
+  AnalysisHistoryErrorBoundaryState
+> {
+  override state: AnalysisHistoryErrorBoundaryState = { hasError: false, error: null };
+
+  constructor(props: AnalysisHistoryErrorBoundaryProps) {
+    super(props);
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error("AnalysisHistory render caught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="text-center py-14 px-6 bg-rose-50/80 border border-rose-200 rounded-3xl shadow-sm space-y-4">
+          <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto mb-2 border border-rose-200">
+            <AlertTriangle className="w-7 h-7" />
+          </div>
+          <h4 className="text-rose-900 font-display font-bold text-base">
+            Unable to Display Optimization History
+          </h4>
+          <p className="text-rose-700 text-xs max-w-md mx-auto leading-relaxed">
+            {this.state.error?.message || "An unexpected error occurred while parsing historical records."}
+          </p>
+          <div className="pt-2 flex justify-center gap-3">
+            <button
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                if (this.props.onRetry) this.props.onRetry();
+              }}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl inline-flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+            >
+              <span>Retry</span>
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export function sanitizeHistoryString(val?: string): string {
@@ -183,12 +249,14 @@ function safeString(val: any): string {
   return String(val);
 }
 
-export default function AnalysisHistory({
-  analyses,
+function AnalysisHistoryContent({
+  analyses = [],
   gapReports = [],
   resumes = [],
   userId,
   selectedResumeId,
+  isLoading = false,
+  error = null,
   onSelectResume,
   onRefresh,
   onOpenInTailor,
@@ -207,20 +275,39 @@ export default function AnalysisHistory({
 
   // Resume lookup mapping helper
   const resumeMap = new Map<string, string>();
-  for (const r of resumes) {
-    if (r.id) resumeMap.set(r.id, r.name || "Resume document");
+  for (const r of (resumes || [])) {
+    if (r?.id) resumeMap.set(r.id, r.name || "Resume document");
   }
 
   // Transform analyses into unified items
-  const unifiedAnalyses: UnifiedHistoryItem[] = analyses.map((a) => {
-    const scoreVal =
-      typeof (a as any).afterAtsScore === "number" && (a as any).afterAtsScore > 0
-        ? (a as any).afterAtsScore
-        : typeof a.matchingScore === "number" && a.matchingScore > 0
-        ? a.matchingScore
-        : typeof (a as any).atsScore === "number"
-        ? (a as any).atsScore
-        : 0;
+  const safeAnalyses = Array.isArray(analyses) ? analyses : [];
+  const unifiedAnalyses: UnifiedHistoryItem[] = safeAnalyses.map((a: any) => {
+    const originalAts = typeof a.originalAtsScore === "number"
+      ? a.originalAtsScore
+      : typeof a.beforeAtsScore === "number"
+      ? a.beforeAtsScore
+      : 0;
+
+    const tailoredAts = typeof a.tailoredAtsScore === "number"
+      ? a.tailoredAtsScore
+      : typeof a.afterAtsScore === "number"
+      ? a.afterAtsScore
+      : typeof a.matchingScore === "number" && a.matchingScore > 0
+      ? a.matchingScore
+      : typeof a.atsScore === "number"
+      ? a.atsScore
+      : 0;
+
+    const targetMatch = typeof a.targetMatchScore === "number"
+      ? a.targetMatchScore
+      : typeof a.targetMatch === "number"
+      ? a.targetMatch
+      : tailoredAts;
+
+    const delta = typeof a.atsScoreDelta === "number"
+      ? a.atsScoreDelta
+      : (tailoredAts > 0 && originalAts > 0 ? tailoredAts - originalAts : undefined);
+
     const cleanCompany = sanitizeHistoryString(a.targetCompany) || "Target Employer";
     const cleanRole = sanitizeHistoryString(a.targetRole) || "Role";
     const resumeName = a.resumeName || (a.resumeId ? resumeMap.get(a.resumeId) : "") || "Curriculum Vitae";
@@ -233,11 +320,16 @@ export default function AnalysisHistory({
       resumeId: a.resumeId,
       resumeName,
       createdAt: a.createdAt,
-      atsScore: scoreVal,
-      beforeAtsScore: (a as any).beforeAtsScore,
-      afterAtsScore: (a as any).afterAtsScore ?? scoreVal,
-      atsScoreDelta: (a as any).atsScoreDelta,
-      scoreBreakdown: (a as any).scores || (a as any).scoreComparison?.breakdown,
+      atsScore: tailoredAts,
+      originalAtsScore: originalAts,
+      tailoredAtsScore: tailoredAts,
+      targetMatchScore: targetMatch,
+      beforeAtsScore: originalAts > 0 ? originalAts : a.beforeAtsScore,
+      afterAtsScore: tailoredAts,
+      atsScoreDelta: delta,
+      tailoredDocument: a.tailoredDocument,
+      templateId: a.templateId,
+      scoreBreakdown: a.scores || a.scoreComparison?.breakdown,
       tailoredContent: a.tailoredContent || "",
       tailoredBullets: a.tailoredBullets || [],
       suggestedChanges: a.suggestedChanges || "",
@@ -260,7 +352,8 @@ export default function AnalysisHistory({
   });
 
   // Transform gapReports into unified items
-  const unifiedGapReports: UnifiedHistoryItem[] = gapReports.map((g) => {
+  const safeGapReports = Array.isArray(gapReports) ? gapReports : [];
+  const unifiedGapReports: UnifiedHistoryItem[] = safeGapReports.map((g: any) => {
     const scoreVal =
       typeof g.atsScore === "number" && g.atsScore > 0
         ? g.atsScore
@@ -432,6 +525,58 @@ export default function AnalysisHistory({
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="w-full space-y-4 animate-pulse">
+        <div className="flex justify-between items-center pb-2">
+          <div className="space-y-2">
+            <div className="h-6 bg-slate-200/80 rounded-xl w-64" />
+            <div className="h-3.5 bg-slate-200/60 rounded-lg w-96" />
+          </div>
+          <div className="h-8 bg-slate-200/70 rounded-xl w-48 hidden sm:block" />
+        </div>
+        <div className="h-10 bg-slate-200/60 rounded-2xl w-full" />
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="p-5 rounded-2xl border border-white bg-white/70 backdrop-blur-sm flex items-center justify-between gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-slate-200/80 shrink-0" />
+            <div className="flex-1 space-y-2 min-w-0">
+              <div className="h-3.5 bg-slate-200/80 rounded w-32" />
+              <div className="h-4 bg-slate-200/80 rounded w-64" />
+              <div className="h-3 bg-slate-200/60 rounded w-48" />
+            </div>
+            <div className="w-24 h-8 bg-slate-200/80 rounded-xl shrink-0" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-14 px-6 bg-rose-50/80 border border-rose-200 rounded-3xl shadow-sm space-y-4">
+        <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto mb-2 border border-rose-200">
+          <AlertTriangle className="w-7 h-7" />
+        </div>
+        <h4 className="text-rose-900 font-display font-bold text-base">
+          Error Loading History
+        </h4>
+        <p className="text-rose-700 text-xs max-w-md mx-auto leading-relaxed">
+          {error}
+        </p>
+        {onRefresh && (
+          <div className="pt-2">
+            <button
+              onClick={onRefresh}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl inline-flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+            >
+              <span>Retry</span>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (allUnifiedItems.length === 0) {
     return (
       <div className="text-center py-14 px-6 bg-white/50 backdrop-blur-md border border-white rounded-3xl shadow-sm">
@@ -439,18 +584,18 @@ export default function AnalysisHistory({
           <Sparkles className="w-7 h-7" />
         </div>
         <h4 className="text-slate-800 font-display font-bold text-base mb-1.5">
-          No Optimization History Yet
+          No optimization history yet.
         </h4>
         <p className="text-slate-500 text-xs max-w-md mx-auto leading-relaxed mb-6">
-          When you perform deterministic ATS compatibility evaluations or generate tailored resumes in the Customization Tool, your records and export configurations will appear here.
+          When you perform deterministic ATS compatibility evaluations or generate tailored resumes, your records and export configurations will appear here.
         </p>
         {onOpenInTailor && (
           <button
             onClick={() => onOpenInTailor({})}
-            className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-xl inline-flex items-center gap-2 transition-all shadow-sm clickable-cursor"
+            className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-xl inline-flex items-center gap-2 transition-all shadow-sm cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Launch Customization Tool</span>
+            <span>Create Your First Tailored Resume</span>
           </button>
         )}
       </div>
@@ -790,10 +935,10 @@ export default function AnalysisHistory({
             </div>
 
             {/* Score Showcase Gauge */}
-            <div className="flex items-center gap-4 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/60 shrink-0">
+            <div className="flex items-center gap-4 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/60 shrink-0 flex-wrap sm:flex-nowrap">
               <div className="text-center">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                  ATS Compatibility
+                  Tailored ATS
                 </span>
                 <div className="flex items-baseline justify-center gap-1">
                   <span className="text-3xl font-display font-extrabold text-slate-900">
@@ -802,21 +947,27 @@ export default function AnalysisHistory({
                 </div>
               </div>
 
-              {selectedItem.beforeAtsScore !== undefined && selectedItem.afterAtsScore !== undefined && (
-                <div className="pl-4 border-l border-slate-200 text-left">
-                  <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">
-                    Optimization Lift
-                  </span>
-                  <div className="text-xs font-bold text-slate-700 mt-0.5">
-                    {selectedItem.beforeAtsScore}% → {selectedItem.afterAtsScore}%
+              <div className="pl-4 border-l border-slate-200 text-left space-y-1">
+                {selectedItem.beforeAtsScore !== undefined && selectedItem.beforeAtsScore > 0 && (
+                  <div className="text-xs text-slate-600 font-medium">
+                    Original ATS: <strong className="text-slate-900 font-bold">{selectedItem.beforeAtsScore}%</strong>
                   </div>
-                  {selectedItem.atsScoreDelta !== undefined && (
-                    <span className="text-[10px] font-extrabold text-emerald-600 block mt-0.5">
-                      +{selectedItem.atsScoreDelta}% ATS Match
-                    </span>
-                  )}
+                )}
+                <div className="text-xs text-slate-600 font-medium">
+                  Tailored ATS: <strong className="text-emerald-700 font-bold">{selectedItem.afterAtsScore ?? selectedItem.atsScore}%</strong>
                 </div>
-              )}
+                {selectedItem.atsScoreDelta !== undefined && selectedItem.atsScoreDelta > 0 && (
+                  <div className="text-[11px] font-extrabold text-emerald-600 flex items-center gap-0.5">
+                    <TrendingUp className="w-3 h-3" />
+                    <span>Improvement: +{selectedItem.atsScoreDelta}%</span>
+                  </div>
+                )}
+                {selectedItem.targetMatchScore !== undefined && selectedItem.targetMatchScore > 0 && (
+                  <div className="text-xs text-cyan-700 font-bold">
+                    Target Match: {selectedItem.targetMatchScore}%
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1241,5 +1392,13 @@ export default function AnalysisHistory({
         </div>
       )}
     </div>
+  );
+}
+
+export default function AnalysisHistory(props: AnalysisHistoryProps) {
+  return (
+    <AnalysisHistoryErrorBoundary onRetry={props.onRefresh}>
+      <AnalysisHistoryContent {...props} />
+    </AnalysisHistoryErrorBoundary>
   );
 }

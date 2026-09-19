@@ -20,6 +20,7 @@ import {
   Briefcase, 
   Users,
   Shield,
+  ShieldCheck,
   Copy,
   Check,
   ExternalLink,
@@ -32,13 +33,14 @@ import TailorWizard from "./TailorWizard";
 import AnalysisHistory from "./AnalysisHistory";
 import FresherHub from "./FresherHub";
 import ApplicationTracker from "./ApplicationTracker";
+import ResumeHealthChecker from "./resume/ResumeHealthChecker";
 
 interface DashboardProps {
   user: any;
   key?: string | number;
 }
 
-type Tab = "resumes" | "tailor" | "fresher" | "applications" | "history";
+type Tab = "resumes" | "health" | "tailor" | "fresher" | "applications" | "history";
 
 export default function Dashboard({ user }: DashboardProps) {
   // Navigation & UI state
@@ -348,6 +350,22 @@ export default function Dashboard({ user }: DashboardProps) {
 
             <button
               onClick={() => {
+                setActiveTab("health");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-300 clickable-cursor ${
+                activeTab === "health"
+                  ? "bg-cyan-500/10 text-cyan-400 border-l-2 border-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.05)]"
+                  : "text-slate-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <div className={`w-2 h-2 rounded-full transition-all duration-300 ${activeTab === "health" ? "bg-cyan-400 shadow-[0_0_8px_#22d3ee]" : "bg-transparent"}`}></div>
+              <ShieldCheck className="w-4 h-4" />
+              <span>Resume Health</span>
+            </button>
+
+            <button
+              onClick={() => {
                 setActiveTab("tailor");
                 setMobileMenuOpen(false);
               }}
@@ -649,12 +667,7 @@ service cloud.firestore {
 
           {/* Dynamic Tab Views - Glassmorphic Content Container */}
           <div className="bg-white/70 backdrop-blur-xl border border-white rounded-3xl p-6 lg:p-8 shadow-sm flex-1 flex flex-col min-h-[460px]">
-            {resumesLoading && analysesLoading ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-center">
-                <div className="w-10 h-10 border-4 border-cyan-100 border-t-cyan-600 rounded-full animate-spin mb-3" />
-                <p className="text-slate-500 text-sm font-medium">Synchronizing workspace files...</p>
-              </div>
-            ) : activeTab === "resumes" ? (
+            {activeTab === "resumes" ? (
               <div className="space-y-6 flex-1 flex flex-col">
                 <div>
                   <h2 className="text-slate-800 font-display font-bold text-xl mb-1">
@@ -679,6 +692,72 @@ service cloud.firestore {
                   userId={user.uid}
                   onRefresh={() => {}}
                 />
+              </div>
+            ) : activeTab === "health" ? (
+              <div className="space-y-6 flex-1 flex flex-col">
+                {getSelectedResume() ? (
+                  <ResumeHealthChecker
+                    parsedResume={{
+                      id: getSelectedResume()?.id || "health-doc",
+                      userId: user.uid,
+                      resumeId: getSelectedResume()?.id || "unknown",
+                      createdAt: getSelectedResume()?.uploadedAt || new Date().toISOString(),
+                      contactInfo: {
+                        name: getSelectedResume()?.name ? getSelectedResume()!.name.replace(/\.[^/.]+$/, "") : "Candidate",
+                        email: (getSelectedResume()?.content.match(/[\w.-]+@[\w.-]+\.\w+/) || [])[0],
+                        phone: (getSelectedResume()?.content.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/) || [])[0]
+                      },
+                      summary: getSelectedResume()?.content.substring(0, 300) || "",
+                      skills: getSelectedResume()?.content.match(/(?:JavaScript|TypeScript|Python|React|Node|SQL|Java|AWS|Docker|Kubernetes|HTML|CSS|Git|C\+\+|C#)/gi) || [],
+                      experience: [
+                        {
+                          role: "Professional Role",
+                          company: "Company",
+                          duration: "Recent",
+                          description: getSelectedResume()?.content.substring(0, 600) || ""
+                        }
+                      ],
+                      projects: [],
+                      education: [
+                        {
+                          degree: "Degree",
+                          institution: "University"
+                        }
+                      ],
+                      achievements: [],
+                      certifications: [],
+                      languages: [],
+                      tools: [],
+                      frameworks: [],
+                      softSkills: [],
+                      atsKeywords: [],
+                      responsibilities: [],
+                      quantifiedMetrics: []
+                    }}
+                    rawText={getSelectedResume()?.content || ""}
+                    resumeName={getSelectedResume()?.name || "Selected Resume"}
+                    onProceedToTailor={() => setActiveTab("tailor")}
+                  />
+                ) : (
+                  <div className="text-center py-14 px-6 bg-white/50 backdrop-blur-md border border-white rounded-3xl shadow-sm space-y-4">
+                    <div className="w-14 h-14 bg-cyan-100 text-cyan-600 rounded-2xl flex items-center justify-center mx-auto mb-2 border border-cyan-200">
+                      <ShieldCheck className="w-7 h-7" />
+                    </div>
+                    <h4 className="text-slate-800 font-display font-bold text-base">
+                      Select a Resume to Evaluate Health
+                    </h4>
+                    <p className="text-slate-500 text-xs max-w-md mx-auto leading-relaxed">
+                      Please upload or select an existing resume from your Resume Vault to run the deterministic Resume Health & ATS Diagnostic.
+                    </p>
+                    <button
+                      onClick={() => setActiveTab("resumes")}
+                      className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-bold rounded-xl inline-flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Go to Resume Vault</span>
+                    </button>
+                  </div>
+                )}
               </div>
             ) : activeTab === "tailor" ? (
               <TailorWizard
@@ -705,6 +784,8 @@ service cloud.firestore {
                   resumes={resumes}
                   userId={user.uid}
                   selectedResumeId={selectedResumeId}
+                  isLoading={analysesLoading || gapReportsLoading}
+                  error={permissionError ? "Firebase permission error. Please verify database rules." : null}
                   onSelectResume={handleResumeSelect}
                   onRefresh={() => {}}
                   onOpenInTailor={handleOpenInTailor}

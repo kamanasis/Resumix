@@ -389,7 +389,7 @@ export default function TailorWizard({
     }
     const timer = setTimeout(() => {
       resolveTargetRole(targetRole);
-      const candidateSkills = parsedResume?.skills?.map((s) => s.name) || [];
+      const candidateSkills = parsedResume?.skills?.map((s: any) => typeof s === "string" ? s : s?.name || "") || [];
       fetchRoleIntelligence(targetRole, targetCompany, jobDescription, candidateSkills);
     }, 500);
     return () => clearTimeout(timer);
@@ -517,7 +517,7 @@ export default function TailorWizard({
         preferredTotal: gapReport?.scoreBreakdown?.preferredTotal || 0,
         criticalGapsCount: gapReport?.scoreBreakdown?.criticalGapsCount || 0,
         requirementProfileHash: frozenProfile?.profileHash || frozenProfile?.id || "hash_draft",
-        intelligenceDatasetVersion: frozenProfile?.datasetVersion || "v1",
+        intelligenceDatasetVersion: (frozenProfile as any)?.datasetVersion || "v1",
         capturedAt: new Date().toISOString()
       };
 
@@ -913,9 +913,10 @@ export default function TailorWizard({
       if (selectedResume && userId) {
         try {
           const analysisId = doc(collection(db, "users", userId, "analyses")).id;
-          const afterScore = (data.data as any)?.scoreComparison?.afterAtsScore ?? gapReport?.atsScore ?? 0;
-          const beforeScore = (data.data as any)?.scoreComparison?.beforeAtsScore ?? gapReport?.atsScore ?? 0;
+          const afterScore = (data.data as any)?.scoreComparison?.afterAtsScore ?? (data.data as any)?.scoreComparison?.tailoredAtsScore ?? gapReport?.atsScore ?? 0;
+          const beforeScore = (data.data as any)?.scoreComparison?.beforeAtsScore ?? (data.data as any)?.scoreComparison?.originalAtsScore ?? gapReport?.atsScore ?? 0;
           const delta = (data.data as any)?.scoreComparison?.atsScoreDelta ?? (afterScore - beforeScore);
+          const targetMatch = (data.data as any)?.scoreComparison?.targetMatchScore ?? afterScore;
 
           const analysisDoc = {
             id: analysisId,
@@ -928,10 +929,15 @@ export default function TailorWizard({
             createdAt: new Date().toISOString(),
             matchingScore: afterScore,
             atsScore: afterScore,
+            originalAtsScore: beforeScore,
+            tailoredAtsScore: afterScore,
+            targetMatchScore: targetMatch,
             beforeAtsScore: beforeScore,
             afterAtsScore: afterScore,
             atsScoreDelta: delta,
             tailoredContent: data.data.tailoredContent || "",
+            tailoredDocument: data.data.tailoredDocument || null,
+            templateId: activeTemplate || "ats-classic",
             suggestedChanges: (data.data.explanations || []).map((e: any) => `- **${e.whatChanged}**: ${e.why}`).join("\n"),
             tailoredBullets: (data.data.changes || []).map((c: any) => ({ current: c.originalText, improved: c.generatedText })),
             responsibilities: frozenProfile?.responsibilities || [],
@@ -2017,10 +2023,10 @@ export default function TailorWizard({
                                   type="button"
                                   onClick={() => handleFixItem(item)}
                                   disabled={isLoadingReco}
-                                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all"
+                                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow-xs"
                                 >
                                   <BookOpen className="w-3.5 h-3.5 text-cyan-600" />
-                                  <span>{isLoadingReco ? "Formulating Coaching..." : "Coaching & Single Fix"}</span>
+                                  <span>{isLoadingReco ? "Formulating Explanation..." : "Explain Fix & Coaching"}</span>
                                 </button>
                               ) : (
                                 <button
@@ -2032,12 +2038,12 @@ export default function TailorWizard({
                                   }}
                                   className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-all"
                                 >
-                                  Hide Coaching
+                                  Hide Explanation
                                 </button>
                               )}
                             </div>
 
-                            {/* 7-PART COACHING PANEL (EXPANDED) */}
+                            {/* 5-PART DETERMINISTIC COACHING & EXPLAIN FIX PANEL (EXPANDED) */}
                             <AnimatePresence>
                               {isExpanded && (
                                 <motion.div
@@ -2068,70 +2074,72 @@ export default function TailorWizard({
                                     <div className="space-y-4">
                                       <div className="flex justify-between items-center pb-3 border-b border-slate-200">
                                         <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                                          <BookOpen className="w-3.5 h-3.5 text-cyan-600" /> Professional Coaching Panel
+                                          <BookOpen className="w-3.5 h-3.5 text-cyan-600" /> Explain Fix & Coaching
                                         </span>
                                         <span className="text-[10px] font-bold text-slate-500 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
                                           Target Section: {reco.section}
                                         </span>
                                       </div>
 
-                                      {/* 1. Why it matters */}
+                                      {/* 1. What is wrong? */}
                                       <div className="space-y-1">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">1. Why It Matters</span>
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">1. What is wrong?</span>
                                         <p className="text-xs text-slate-700 font-medium leading-relaxed">
-                                          {reco.whyItMatters || reco.reason || item.whyItMatters}
+                                          {reco.whatIsWrong || reco.whatResumixFound || item.evidenceFound || "The resume lacks clear, verified evidence matching this job requirement."}
                                         </p>
                                       </div>
 
-                                      {/* 2. What Resumix found */}
+                                      {/* 2. Why does it matter? */}
                                       <div className="space-y-1">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">2. What Resumix Found</span>
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">2. Why does it matter?</span>
                                         <p className="text-xs text-slate-700 font-medium leading-relaxed">
-                                          {reco.whatResumixFound || item.evidenceFound}
+                                          {reco.whyItMatters || reco.reason || item.whyItMatters || "ATS scanners and recruiters check for explicit demonstrations of this capability."}
                                         </p>
                                       </div>
 
-                                      {/* 3. What you can safely change */}
+                                      {/* 3. What can Resumix safely change? */}
                                       <div className="space-y-1">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">3. What You Can Safely Change</span>
+                                        <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">3. What can Resumix safely change?</span>
                                         <p className="text-xs text-slate-700 font-medium leading-relaxed">
-                                          {reco.whatYouCanSafelyChange || item.recommendedAction}
+                                          {reco.whatCanSafelyChange || reco.whatYouCanSafelyChange || item.recommendedAction || "Highlight and rephrase existing verified projects or coursework containing related work."}
                                         </p>
                                       </div>
 
-                                      {/* 4. What you should NOT change (Strict Anti-Fabrication Warning) */}
+                                      {/* 4. What information is missing? */}
+                                      <div className="space-y-1">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">4. What information is missing?</span>
+                                        <p className="text-xs text-slate-700 font-medium leading-relaxed">
+                                          {reco.missingInformation || reco.evidenceNeeded || item.evidenceNeeded || `Specific metrics, dates, or tool experience demonstrating ${item.title}.`}
+                                        </p>
+                                      </div>
+
+                                      {/* 5. What will Resumix NOT invent? */}
                                       <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1 text-xs text-amber-900">
                                         <div className="flex items-center gap-1.5 font-bold text-amber-800">
                                           <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                          <span>4. What You Should NOT Change</span>
+                                          <span>5. What will Resumix NOT invent?</span>
                                         </div>
                                         <p className="text-[11px] leading-relaxed">
-                                          {reco.whatYouShouldNotChange || `Do NOT add "${item.title}" merely to increase ATS score if you do not have genuine experience.`}
+                                          {reco.whatWillNotInvent || reco.whatYouShouldNotChange || `Resumix will never fabricate unverified experience or insert "${item.title}" if not present in your career history.`}
                                         </p>
                                       </div>
 
-                                      {/* 5. Example of a better version */}
-                                      <div className="space-y-1">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">5. Example of a Better Version</span>
-                                        <div className="bg-white border border-cyan-200 p-3 rounded-xl text-xs text-slate-800 italic border-l-4 border-l-cyan-500 shadow-xs">
-                                          "{reco.exampleBetterVersion || reco.suggestedSentence}"
+                                      {/* Example of a safe better version */}
+                                      {reco.exampleBetterVersion && (
+                                        <div className="space-y-1 pt-1">
+                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Example of a Better Grounded Version</span>
+                                          <div className="bg-white border border-cyan-200 p-3 rounded-xl text-xs text-slate-800 italic border-l-4 border-l-cyan-500 shadow-xs">
+                                            "{reco.exampleBetterVersion || reco.suggestedSentence}"
+                                          </div>
                                         </div>
-                                      </div>
+                                      )}
 
-                                      {/* 6. Expected impact & 7. Evidence needed */}
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 text-xs">
-                                        <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
-                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">6. Expected Impact</span>
-                                          <p className="text-[11px] text-slate-700 font-medium">
-                                            {reco.expectedImpact || `${reco.atsImpact} impact on role keyword matching and recruiter confidence.`}
-                                          </p>
-                                        </div>
-                                        <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
-                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">7. Evidence Needed</span>
-                                          <p className="text-[11px] text-slate-700 font-medium">
-                                            {reco.evidenceNeeded || item.evidenceNeeded || `Verified project, coursework, internship, or work experience demonstrating ${item.title}.`}
-                                          </p>
-                                        </div>
+                                      {/* Expected impact */}
+                                      <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Expected Impact</span>
+                                        <p className="text-[11px] text-slate-700 font-medium">
+                                          {reco.expectedImpact || `${reco.atsImpact || "Positive"} impact on requirement coverage and recruiter confidence.`}
+                                        </p>
                                       </div>
 
                                       {/* Mark resolved button */}
@@ -2354,7 +2362,7 @@ export default function TailorWizard({
                 <button
                   type="button"
                   onClick={() => {
-                    const candidateSkills = parsedResume?.skills?.map((s) => s.name) || [];
+                    const candidateSkills = parsedResume?.skills?.map((s: any) => typeof s === "string" ? s : s?.name || "") || [];
                     fetchMarketIntelligence(targetCompany, targetRole, candidateSkills);
                   }}
                   disabled={isLoadingIntelligence}
@@ -2399,7 +2407,9 @@ export default function TailorWizard({
                     <h4 className="text-lg font-display font-bold text-slate-900 flex items-center gap-2">
                       <span>{companyIntelligence.normalizedName}</span>
                       {companyIntelligence.status === "VERIFIED" && (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" title="Verified Entity" />
+                        <span title="Verified Entity">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                        </span>
                       )}
                     </h4>
                   </div>
